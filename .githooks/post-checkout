@@ -1,0 +1,227 @@
+#!/bin/bash
+# Thin wrapper. Fetches and caches post-checkout.sh from central repo, then runs it.
+
+SCRIPT=".ai-shared/post-checkout.sh"
+RAW="https://raw.githubusercontent.com/mvdatacenter/ai-instructions/main/hooks/post-checkout.sh"
+API="https://api.github.com/repos/mvdatacenter/ai-instructions/contents/hooks/post-checkout.sh?ref=main"
+
+PRECOMMIT_SCRIPT=".ai-shared/pre-commit.sh"
+PRECOMMIT_RAW="https://raw.githubusercontent.com/mvdatacenter/ai-instructions/main/hooks/pre-commit.sh"
+PRECOMMIT_API="https://api.github.com/repos/mvdatacenter/ai-instructions/contents/hooks/pre-commit.sh?ref=main"
+
+# A cached script is run only while it is still the content a provisioning pass
+# recorded beside it, not because the path is occupied. `.ai-shared/` is
+# untracked, locally ignored, and inside the working tree every session writes
+# to, so fetching only when the file was absent made the first copy that landed
+# there permanent: whatever reached the path afterwards ran on every later
+# checkout, and the refresh that would have replaced it lives inside that same
+# file (#4092). The blob sha `fetch_shared_file` verified against the central
+# tree is written next to each cached file, and tests/run-eremos.sh writes the
+# same record for the candidate payload it seeds, so the comparison is local and
+# one hash of one file wide.
+cache_is_what_provisioning_recorded() {
+    local file="$1" recorded actual
+    [ -f "$file" ] || return 1
+    # The two deliberate pins, read the way review-helpers.sh reads them: a
+    # scenario worker whose `.ai-shared/` IS the system under test (#1316), and a
+    # live hook-development task whose receipt binds the seeded cache to its task
+    # id and every seeded byte (#1388). Fetching reviewed main over either
+    # replaces the code under test with the code it is being tested against.
+    [ -f ".ai-shared/.eremos-candidate-sut" ] && return 0
+    [ -f ".ai-shared/.worktree-candidate-runtime.json" ] && return 0
+    recorded=$(cat ".ai-shared/.sha-hooks-${file##*/}" 2>/dev/null)
+    [ -n "$recorded" ] || return 1
+    # An unreadable or absent git leaves this empty, which counts as no evidence
+    # and costs one fetch rather than admitting an unmeasured file.
+    actual=$(git hash-object "$file" 2>/dev/null)
+    [ -n "$actual" ] && [ "$actual" = "$recorded" ]
+}
+
+# Land each download on a side path first: a transfer that dies mid-stream still
+# writes what it received, and straight into the cache path that half-file
+# becomes the script this run executes. The same one line already protects the
+# pre-commit wrapper's fetch.
+#
+# The retry is the other half: these two fetches are what the whole of
+# provisioning waits on, and every file the central scripts pull afterwards
+# already carries these flags (#3753). Pin HTTP/1.1 so curl retries transient
+# 5xx responses instead of aborting on exit 56 from an nghttp2 callback
+# failure (#5095). Bound stalls and connection delays, and resume partial
+# transfers (#5178).
+#
+# The API address is the second source: docs/runtime-and-delivery-reference.md,
+# "Guard reference" (#6543).
+#
+# Returns non-zero when the cache is still not something this run can account
+# for, so the caller reports rather than running a file of unknown origin.
+ensure_cached() {
+    local dest="$1" url="$2" api="$3" token="" partial status fallback_dir
+    cache_is_what_provisioning_recorded "$dest" && return 0
+    mkdir -p .ai-shared
+    # In the central source repository, seed .ai-shared/ files from the reviewed
+    # origin/main before bash opens them, so a script does not replace itself
+    # mid-run when branch and main copies differ (#6543). The working-tree copy
+    # is never the fallback (#1285); an unresolvable origin/main fetches below.
+    if [ -f "hooks/pre-commit.sh" ] && [ -f "org.md" ]; then
+        local src_file=""
+        case "$dest" in
+            */pre-commit.sh) src_file="hooks/pre-commit.sh" ;;
+            */post-checkout.sh) src_file="hooks/post-checkout.sh" ;;
+        esac
+        if [ -n "$src_file" ]; then
+            partial="$dest.seeding.$$"
+            if git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null 2>&1 \
+                && git show "origin/main:$src_file" > "$partial" 2>/dev/null; then
+                mv -f "$partial" "$dest"
+                rm -f "$partial"
+                return 0
+            fi
+            rm -f "$partial"
+        fi
+    fi
+    token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+    if [ -z "$token" ]; then
+        if command -v gh >/dev/null 2>&1; then
+            token=$(gh auth token 2>/dev/null || true)
+        fi
+        if [ -z "$token" ]; then
+            for fallback_dir in /opt/homebrew/bin /usr/local/bin; do
+                if [ -x "$fallback_dir/gh" ]; then
+                    token=$("$fallback_dir/gh" auth token 2>/dev/null || true)
+                    [ -n "$token" ] && break
+                fi
+            done
+        fi
+    fi
+    # With no token the fetch below goes out unauthenticated, and this
+    # repository is private, so a reachable raw.githubusercontent.com hides the
+    # path rather than rejecting the credential: it answers 404, which curl -f
+    # reports as an ordinary failed fetch. Record the gap so the reports below
+    # can name the credential (#5146). Whether that 404 actually came back is
+    # the fetch's own outcome, recorded beside it, because an offline machine
+    # with no token gets no answer at all (#6126). Both are reset per fetch, so
+    # each report describes the fetch that just failed.
+    AUTH_CREDENTIAL_MISSING=0
+    [ -n "$token" ] || AUTH_CREDENTIAL_MISSING=1
+    partial="$dest.fetching.$$"
+    # The credential reaches curl on stdin rather than in an argument:
+    # /proc/<pid>/cmdline is world-readable, so -H "Authorization: token …"
+    # publishes a live token to every process on this box for the length of
+    # each transfer.
+    status=0
+    if [ -n "$token" ]; then
+        FETCH_HTTP_CODE=$(printf 'header = "Authorization: token %s"\n' "$token" |
+        curl --http1.1 -sf --retry 3 --retry-delay 1 --retry-connrefused \
+            --connect-timeout 15 --speed-limit 10240 --speed-time 15 -C - --config - \
+            -w '%{http_code}' "$url" -o "$partial") || status=$?
+    else
+        FETCH_HTTP_CODE=$(curl --http1.1 -sf --retry 3 --retry-delay 1 --retry-connrefused \
+            --connect-timeout 15 --speed-limit 10240 --speed-time 15 -C - --config - \
+            -w '%{http_code}' "$url" -o "$partial" < /dev/null) || status=$?
+    fi
+    RAW_FETCH_STATUS=$status
+    FETCH_TRIED_API=""
+    if [ "$status" -ne 0 ] && [ -n "$token" ]; then
+        FETCH_TRIED_API="$api"
+        rm -f "$partial"
+        status=0
+        FETCH_HTTP_CODE=$(printf 'header = "Authorization: token %s"\nheader = "Accept: application/vnd.github.raw"\n' "$token" |
+        curl --http1.1 -sf --retry 3 --retry-delay 1 --retry-connrefused \
+            --connect-timeout 15 --speed-limit 10240 --speed-time 15 --config - \
+            -w '%{http_code}' "$api" -o "$partial") || status=$?
+    fi
+    FETCH_STATUS=$status
+    if [ "$status" -eq 0 ]; then
+        # What just arrived is reviewed main, not a recorded file: the record is
+        # written by the pinned, tree-verified fetch hooks/pre-commit.sh performs
+        # on its first run. Writing one here would let an unverified transfer
+        # stand in for that check.
+        mv -f "$partial" "$dest"
+        [ -n "$token" ] && export GH_TOKEN="$token" GITHUB_TOKEN="$token"
+        return 0
+    fi
+    rm -f "$partial"
+    return 1
+}
+
+report_api_source() {
+    [ -n "${FETCH_TRIED_API:-}" ] || return 0
+    echo "The raw fetch failed (curl exit ${RAW_FETCH_STATUS:-unknown}), and so did" >&2
+    echo "$FETCH_TRIED_API (curl exit ${FETCH_STATUS:-unknown}, HTTP ${FETCH_HTTP_CODE:-000})." >&2
+}
+
+# Each of the three reports below ends the same way, telling the reader to rerun
+# provisioning "once network or 'gh auth' is available" -- two causes, and
+# nothing in the failure says which. This says which, when the fetch never had a
+# credential to send. Written once and called from all three, because the
+# reports were already three copies of one paragraph and a fourth reader of
+# AUTH_CREDENTIAL_MISSING would be the easiest one to add without the line.
+#
+# The missing token is known before the fetch and the 404 it produces is not,
+# so the 404 is named only when this fetch was answered one. `ensure_cached`
+# reads the answer off curl's `-w '%{http_code}'`, which is 000 when no HTTP
+# answer came back (the body goes to the side path, so stdout carries only that
+# code).
+report_missing_credential() {
+    [ "${AUTH_CREDENTIAL_MISSING:-0}" -eq 1 ] || return 0
+    echo "No GitHub credential was available: neither GH_TOKEN nor GITHUB_TOKEN" >&2
+    echo "is set and no gh login answered." >&2
+    if [ "${FETCH_HTTP_CODE:-000}" = "404" ]; then
+        echo "mvdatacenter/ai-instructions is private, so the fetch was answered" >&2
+        echo "404 rather than 401: the network answered, and the credential is" >&2
+        echo "what is missing." >&2
+    elif [ "${FETCH_HTTP_CODE:-000}" = "000" ]; then
+        echo "The fetch got no HTTP answer at all (curl exit ${FETCH_STATUS:-unknown})," >&2
+        echo "so the network failed before the missing credential could matter." >&2
+    else
+        echo "The fetch was answered HTTP $FETCH_HTTP_CODE (curl exit ${FETCH_STATUS:-unknown})," >&2
+        echo "not the 404 a missing credential alone produces." >&2
+    fi
+}
+
+PRECOMMIT_OK=0
+ensure_cached "$PRECOMMIT_SCRIPT" "$PRECOMMIT_RAW" "$PRECOMMIT_API" && PRECOMMIT_OK=1
+
+# Warming the pre-commit cache is best-effort — a checkout with nothing cached
+# still runs the central post-checkout, which reports and reminds. A cache that
+# is present but not what a verified fetch recorded is the other state, and there
+# the handoff is what runs it: the central post-checkout's first act is
+# `bash .ai-shared/pre-commit.sh`. Provisioning is skipped rather than performed
+# by a file of unknown origin.
+if [ "$PRECOMMIT_OK" -eq 0 ] && [ -f "$PRECOMMIT_SCRIPT" ]; then
+    echo "post-checkout: $PRECOMMIT_SCRIPT is not the content the last verified" >&2
+    echo "fetch recorded in .ai-shared/.sha-hooks-pre-commit.sh, and it could not" >&2
+    echo "be fetched from $PRECOMMIT_RAW to replace it," >&2
+    echo "so this checkout was left unprovisioned rather than provisioned by a" >&2
+    echo "cached file of unknown origin." >&2
+    report_api_source
+    report_missing_credential
+    echo "Run 'bash .githooks/pre-commit' once network or 'gh auth' is" >&2
+    echo "available. Session launches refuse an unprovisioned checkout" >&2
+    echo "(PM-0064), and commit and push run the same provisioning." >&2
+elif ensure_cached "$SCRIPT" "$RAW" "$API"; then
+    bash "$SCRIPT" "$@"
+elif [ -f "$SCRIPT" ]; then
+    echo "post-checkout: $SCRIPT is not the content the last verified fetch" >&2
+    echo "recorded in .ai-shared/.sha-hooks-post-checkout.sh, and $RAW" >&2
+    echo "could not be fetched to replace it, so this checkout is unprovisioned" >&2
+    echo "and the cached file was not run." >&2
+    report_api_source
+    report_missing_credential
+    echo "Run 'bash .githooks/pre-commit' once network or 'gh auth' is" >&2
+    echo "available. Session launches refuse an unprovisioned checkout" >&2
+    echo "(PM-0064), and commit and push run the same provisioning." >&2
+else
+    echo "post-checkout: $SCRIPT is missing and could not be fetched from" >&2
+    echo "$RAW, so this checkout is unprovisioned." >&2
+    report_api_source
+    report_missing_credential
+    echo "Run 'bash .githooks/pre-commit' once network or 'gh auth' is" >&2
+    echo "available. Session launches refuse an unprovisioned checkout" >&2
+    echo "(PM-0064), and commit and push run the same provisioning." >&2
+fi
+
+# The checkout has already happened; this hook's status is the status Git gives
+# back for it, so a provisioning problem is reported rather than turned into a
+# failed checkout, switch, or clone (#1964).
+exit 0

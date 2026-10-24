@@ -1,0 +1,208 @@
+#!/bin/bash
+# Thin wrapper. Fetches and caches pre-commit.sh from central repo, then runs it.
+
+SCRIPT=".ai-shared/pre-commit.sh"
+RAW="https://raw.githubusercontent.com/mvdatacenter/ai-instructions/main/hooks/pre-commit.sh"
+# The API second source: docs/runtime-and-delivery-reference.md, "Guard
+# reference" (#6543).
+API="https://api.github.com/repos/mvdatacenter/ai-instructions/contents/hooks/pre-commit.sh?ref=main"
+
+# What this wrapper hands control to has to be the central script, and the path
+# being occupied does not say that. `.ai-shared/` is untracked, locally ignored,
+# and inside the working tree every session writes to, so fetching only when the
+# file was absent made the first copy that landed there permanent: a hand edit, a
+# revert, a half-written file, or a two-line stub became the guard every later
+# commit ran, and no later fetch replaced it. The refresh that would have
+# corrected it lives inside that same file — `fetch_shared_file` in
+# hooks/pre-commit.sh re-fetches and re-execs the script — so a cache that stops
+# being the central logic also stops being able to repair itself, and the
+# staged-diff credential scan stops running while every commit still looks
+# guarded (#4092).
+#
+# So measure the cache instead. That same fetch records the blob sha it verified
+# against the central tree next to each cached file, and tests/run-eremos.sh
+# records the same for the candidate payload it seeds a scenario worker with, so
+# the record is what a provisioning pass left behind and the comparison is local,
+# offline, and one hash of one file wide.
+cache_is_what_provisioning_recorded() {
+    local recorded actual
+    [ -f "$SCRIPT" ] || return 1
+    # The two deliberate pins, read the way review-helpers.sh reads them: a
+    # scenario worker whose `.ai-shared/` IS the system under test (#1316), and a
+    # live hook-development task holding a receipt that binds the seeded cache to
+    # its task id and every seeded byte (#1388). Both hold candidate bytes that
+    # differ from reviewed sha records on purpose, and hooks/pre-commit.sh
+    # validates the receipt before serving them. Fetching reviewed main over
+    # either replaces the code under test with the code it is being tested
+    # against.
+    [ -f ".ai-shared/.eremos-candidate-sut" ] && return 0
+    [ -f ".ai-shared/.worktree-candidate-runtime.json" ] && return 0
+    recorded=$(cat ".ai-shared/.sha-hooks-pre-commit.sh" 2>/dev/null)
+    [ -n "$recorded" ] || return 1
+    # An unreadable or absent git leaves this empty, which counts as no evidence
+    # and costs one fetch rather than admitting an unmeasured file.
+    actual=$(git hash-object "$SCRIPT" 2>/dev/null)
+    [ -n "$actual" ] && [ "$actual" = "$recorded" ]
+}
+
+CACHE_OK=0
+cache_is_what_provisioning_recorded && CACHE_OK=1
+
+if [ "$CACHE_OK" -eq 0 ]; then
+    mkdir -p .ai-shared
+    # In the central source repository, seed .ai-shared/pre-commit.sh from the
+    # reviewed origin/main before bash opens the script, so the script does not
+    # replace itself mid-run when branch and main copies differ (#6543). The
+    # working-tree copy is never the fallback: that would serve this branch's
+    # unreviewed code (#1285); an unresolvable origin/main fetches main below.
+    if [ -f "hooks/pre-commit.sh" ] && [ -f "org.md" ]; then
+        PARTIAL="$SCRIPT.seeding.$$"
+        if git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null 2>&1 \
+            && git show "origin/main:hooks/pre-commit.sh" > "$PARTIAL" 2>/dev/null; then
+            mv -f "$PARTIAL" "$SCRIPT"
+            CACHE_OK=1
+        fi
+        rm -f "$PARTIAL"
+    fi
+fi
+
+if [ "$CACHE_OK" -eq 0 ]; then
+    TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+    if [ -z "$TOKEN" ]; then
+        if command -v gh >/dev/null 2>&1; then
+            TOKEN=$(gh auth token 2>/dev/null || true)
+        fi
+        if [ -z "$TOKEN" ]; then
+            for fallback_dir in /opt/homebrew/bin /usr/local/bin; do
+                if [ -x "$fallback_dir/gh" ]; then
+                    TOKEN=$("$fallback_dir/gh" auth token 2>/dev/null || true)
+                    [ -n "$TOKEN" ] && break
+                fi
+            done
+        fi
+    fi
+    # Land the download on a side path first: a transfer that dies mid-stream
+    # still writes what it received, and under -o "$SCRIPT" that half-file
+    # becomes the cache this run executes.
+    PARTIAL="$SCRIPT.fetching.$$"
+    # Ride out the transient statuses. This is the one fetch the whole of
+    # provisioning waits on, and it was the only one on the box with no retry
+    # while every file the central script pulls afterwards already carries these
+    # same flags (#3753). Pin HTTP/1.1 so curl retries transient 5xx responses
+    # instead of aborting on exit 56 from an nghttp2 callback failure (#5095).
+    # Bound stalls and connection delays, and resume partial transfers (#5178).
+    #
+    # The credential reaches curl on stdin rather than in an argument:
+    # /proc/<pid>/cmdline is world-readable, so -H "Authorization: token …"
+    # publishes a live token to every process on this box for the length of
+    # each transfer.
+    FETCH_STATUS=0
+    if [ -n "$TOKEN" ]; then
+        printf 'header = "Authorization: token %s"\n' "$TOKEN" |
+        curl --http1.1 -sf --retry 3 --retry-delay 1 --retry-connrefused \
+            --connect-timeout 15 --speed-limit 10240 --speed-time 15 -C - --config - \
+            "$RAW" -o "$PARTIAL" || FETCH_STATUS=$?
+    else
+        curl --http1.1 -sf --retry 3 --retry-delay 1 --retry-connrefused \
+            --connect-timeout 15 --speed-limit 10240 --speed-time 15 -C - --config - \
+            "$RAW" -o "$PARTIAL" < /dev/null || FETCH_STATUS=$?
+    fi
+    RAW_STATUS=$FETCH_STATUS
+    if [ "$FETCH_STATUS" -ne 0 ] && [ -n "$TOKEN" ]; then
+        rm -f "$PARTIAL"
+        FETCH_STATUS=0
+        printf 'header = "Authorization: token %s"\nheader = "Accept: application/vnd.github.raw"\n' "$TOKEN" |
+        curl --http1.1 -sf --retry 3 --retry-delay 1 --retry-connrefused \
+            --connect-timeout 15 --speed-limit 10240 --speed-time 15 --config - \
+            "$API" -o "$PARTIAL" || FETCH_STATUS=$?
+    fi
+    if [ "$FETCH_STATUS" -eq 0 ]; then
+        mv -f "$PARTIAL" "$SCRIPT"
+        # What just arrived is reviewed main, not a recorded file: the record is
+        # written by the pinned, tree-verified fetch the script below performs on
+        # its first run, which is what leaves the next invocation a cache to
+        # measure. Writing one here would let an unverified transfer stand in for
+        # that check.
+        CACHE_OK=1
+    else
+        rm -f "$PARTIAL"
+    fi
+fi
+
+# Neither GitHub source answered. An ai-instructions clone beside this
+# repository holds the same file at its origin/main, which is how a cloud
+# environment's setup script, with fresh clones and no credential, gets one
+# (#6543). The script decides whether that clone is fresh enough to read the
+# rest from, and refuses the pass if it is not, so this seeds it from origin/main
+# whatever that ref's age. Which clones it reads, in order, is in
+# docs/runtime-and-delivery-reference.md under #6543.
+if [ "$CACHE_OK" -eq 0 ]; then
+    HERE=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+    if [ -n "${CLAUDE_INSTRUCTIONS_DIR:-}" ]; then
+        SIBLINGS="$CLAUDE_INSTRUCTIONS_DIR"
+    else
+        SIBLINGS="$(dirname "$HERE")/ai-instructions"
+        RC_FOR_ROOTS=$(command -v rc 2>/dev/null || true)
+        [ -n "$RC_FOR_ROOTS" ] || RC_FOR_ROOTS="$HOME/.local/bin/rc"
+        if [ -f "$RC_FOR_ROOTS" ] && grep -q -- __print-projects-roots "$RC_FOR_ROOTS" 2>/dev/null; then
+            ROOTS=$(env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE bash "$RC_FOR_ROOTS" __print-projects-roots 2>/dev/null | sed -e '/^$/d' -e 's#/*$#/ai-instructions#')
+            [ -z "$ROOTS" ] || SIBLINGS="$SIBLINGS
+$ROOTS"
+        fi
+    fi
+    while IFS= read -r SIBLING; do
+        [ -n "$SIBLING" ] && [ -e "$SIBLING/.git" ] || continue
+        THERE=$(env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git -C "$SIBLING" rev-parse --show-toplevel 2>/dev/null)
+        [ -n "$THERE" ] && [ "$THERE" != "$HERE" ] || continue
+        case "$(env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git -C "$SIBLING" remote get-url origin 2>/dev/null)" in
+            *[/:]mvdatacenter/ai-instructions|*[/:]mvdatacenter/ai-instructions.git) ;;
+            *) continue ;;
+        esac
+        PARTIAL="$SCRIPT.seeding.$$"
+        if env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git -C "$SIBLING" show "refs/remotes/origin/main:hooks/pre-commit.sh" > "$PARTIAL" 2>/dev/null; then
+            mv -f "$PARTIAL" "$SCRIPT"
+            CACHE_OK=1
+            break
+        fi
+        rm -f "$PARTIAL"
+    done <<SIBLINGS_EOF
+$SIBLINGS
+SIBLINGS_EOF
+fi
+
+if [ "$CACHE_OK" -eq 0 ]; then
+    if [ ! -f "$SCRIPT" ]; then
+        echo "pre-commit: $SCRIPT is missing and could not be fetched from" >&2
+        echo "$RAW" >&2
+        if [ -n "$TOKEN" ]; then
+            echo "(curl exit ${RAW_STATUS:-unknown}) or $API" >&2
+        fi
+        echo "after 4 attempts each (curl exit ${FETCH_STATUS:-unknown})," >&2
+        echo "so the central pre-commit logic never ran." >&2
+    else
+        echo "pre-commit: $SCRIPT is not the content the last verified fetch" >&2
+        echo "recorded in .ai-shared/.sha-hooks-pre-commit.sh, and $RAW" >&2
+        if [ -n "$TOKEN" ]; then
+            echo "(curl exit ${RAW_STATUS:-unknown}) or $API" >&2
+        fi
+        echo "could not be fetched to replace it after 4 attempts each (curl exit" >&2
+        echo "${FETCH_STATUS:-unknown}), so what is cached is a file of unknown" >&2
+        echo "origin rather than the central pre-commit logic." >&2
+    fi
+    if [ -z "$TOKEN" ]; then
+        echo "No GitHub authentication token was resolved (gh auth token returned empty" >&2
+        echo "and neither GH_TOKEN nor GITHUB_TOKEN is set)." >&2
+    fi
+    echo "The commit is blocked rather than allowed through unchecked, because that" >&2
+    echo "script carries the staged-diff credential scan and the generated agent" >&2
+    if [ -z "$TOKEN" ]; then
+        echo "surfaces. Check 'gh auth status' or export GH_TOKEN, then commit again." >&2
+    else
+        echo "surfaces. Check network access and 'gh auth status', then commit again." >&2
+    fi
+    exit 1
+fi
+
+[ -n "$TOKEN" ] && export GH_TOKEN="$TOKEN" GITHUB_TOKEN="$TOKEN"
+
+bash "$SCRIPT"
