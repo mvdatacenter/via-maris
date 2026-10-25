@@ -10,7 +10,7 @@ docker run -p 8480:8480 -v "$PWD/config.json:/etc/via-maris/config.json:ro" via-
 
 ## Sections
 
-- `listen`: the address to serve on, `:8480` in the image.
+- `listen`: the address to serve on, `:8480` in the example.
 - `advisories`: where the OSV per-ecosystem `all.zip` exports are read from. `refresh` sets how often they are re-read. `maxAge` sets how old the loaded data may be before every checked request is refused.
 - `inUse`: an object in an S3-compatible store that lists the versions already in use, shaped `{"generated": "<RFC 3339>", "ecosystems": {"npm": {"<package>": ["<version>"]}}}`. A version inside the hold is served when it fixes an advisory against a version in that list. `maxAge` bounds how stale the object may be.
 - `records`: where decision records are uploaded, as NDJSON batches under `prefix`. A record is written to stdout for every decision. Once the oldest unshipped record is older than `maxUnshipped`, every request is answered 503.
@@ -44,7 +44,7 @@ The checks differ by front end:
 
 ## Operating
 
-- `GET /healthz` answers 503 and names what is not ready (for example advisory data, the in-use set, the Go index, or the record upload).
+- `GET /healthz` answers 503 and names what is not ready: an ecosystem's advisory data, a Go index, or the record upload. A stale in-use set only stops fix releases from passing the hold, so it does not make the gateway unready.
 - `GET /metrics` serves Prometheus text.
 
 A refused version is answered 403. The reason names the package, the version, and the advisory or the age that refused it.
