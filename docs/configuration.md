@@ -1,6 +1,6 @@
 # Configuring and pointing clients at via-maris
 
-`via-maris` is a single Go program built from the standard library alone. It reads one JSON file, named as its only argument. [`config.example.json`](../config.example.json) carries every field. Unknown fields are rejected, and so is a configuration that fails validation; the gateway then does not start.
+`via-maris` is a single Go program built from the standard library alone. It reads one JSON file, named as its only argument. [`config.example.json`](../config.example.json) carries every field. A configuration with an unknown field or one that fails validation stops the gateway at startup.
 
 ```
 go test ./...
@@ -22,7 +22,7 @@ The access keys for both stores are read from the environment variables the stor
 
 - `hold`: the release-age hold. A version published more recently than this is refused.
 - `advisories`: `malicious` refuses versions that a `MAL-` advisory lists. `all` refuses a version that any advisory lists.
-- `exceptions`: admit one version through the hold. Each exception names the package, version, a reason, the review that approved it, and an `expires` date. It applies only until that date. No exception admits a malicious version.
+- `exceptions`: admit one version through the hold. Each exception names the package, version, a reason, the review that approved it, and an `expires` date. It applies only until that date, and to the hold alone: the advisory check still refuses a malicious version.
 
 ## Clients
 
@@ -44,7 +44,7 @@ The checks differ by front end:
 
 ## Operating
 
-- `GET /healthz` answers 503 and names what is not ready: an ecosystem's advisory data, a Go index, or the record upload. A stale in-use set only stops fix releases from passing the hold, so it does not make the gateway unready.
+- `GET /healthz` answers 503 and names what is not ready: an ecosystem's advisory data, a Go index, or the record upload. A stale in-use set only stops fix releases from passing the hold, so the gateway stays ready.
 - `GET /metrics` serves Prometheus text.
 
-A refused version is answered 403. The reason names the package, the version, and the advisory or the age that refused it.
+A refused version is answered 403, with the refusal reason in the response.
