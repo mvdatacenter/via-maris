@@ -50,8 +50,8 @@ jobs:
           cosign sign --yes "$IMAGE@$DIGEST"
           echo "Published $IMAGE@$DIGEST" >> "$GITHUB_STEP_SUMMARY"
 
-      # The in-cluster registry syncs ghcr.io anonymously, so a private package
-      # would publish here and still fail every pull there.
+      # The image is pulled without credentials, so a private package would
+      # publish here and still fail every pull.
       - name: Check the image pulls anonymously
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
