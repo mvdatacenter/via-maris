@@ -28,12 +28,17 @@ func TestAptServesTheArchiveFromTheSnapshotOneHoldAgo(t *testing.T) {
 	t.Cleanup(snapshot.Close)
 	env := newTestEnv(t, Upstream{Name: "apt", Ecosystem: "apt", URL: snapshot.URL, Hold: Duration{7 * day}})
 
+	// The handler reads the clock itself, so a run crossing UTC midnight may
+	// see either day's snapshot; it must be one of the two.
+	before := aptSnapshot(time.Now(), 7*day)
 	status, body := env.get("/apt/ubuntu/pool/main/c/curl/curl_8.5.0-2ubuntu10.6_amd64.deb")
+	after := aptSnapshot(time.Now(), 7*day)
 	if status != http.StatusOK || body != "deb" {
 		t.Fatalf("%d %q", status, body)
 	}
-	if want := "/ubuntu/" + aptSnapshot(time.Now(), 7*day) + "/pool/main/c/curl/curl_8.5.0-2ubuntu10.6_amd64.deb"; asked != want {
-		t.Errorf("asked %s, want %s", asked, want)
+	const file = "/pool/main/c/curl/curl_8.5.0-2ubuntu10.6_amd64.deb"
+	if asked != "/ubuntu/"+before+file && asked != "/ubuntu/"+after+file {
+		t.Errorf("asked %s, want the snapshot %s or %s", asked, before, after)
 	}
 	if rec := env.lastRecord(); rec.Kind != "artifact" || rec.Package != "curl" || rec.Version != "8.5.0-2ubuntu10.6" || !rec.Served {
 		t.Errorf("record %+v", rec)
