@@ -8,9 +8,9 @@ The gateway keeps nothing that cannot be fetched again from upstream. Its behavi
 
 The name comes from the Via Maris, the Way of the Sea, the ancient road from Egypt through Galilee to Damascus.
 
-## Status
+## Running it
 
-There is no code yet. The design is being written first, and this repository holds its license and project terms until the implementation starts.
+`docker build -t via-maris .` builds the image. [docs/configuration.md](docs/configuration.md) covers running, configuring, and pointing package managers at it.
 
 ## License
 

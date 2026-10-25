@@ -1,0 +1,86 @@
+{
+  "listen": ":8480",
+  "advisories": {
+    "source": "https://osv-vulnerabilities.storage.googleapis.com",
+    "refresh": "15m",
+    "maxAge": "2h"
+  },
+  "inUse": {
+    "store": {
+      "endpoint": "https://in-use-store.example.com",
+      "region": "us-east-1",
+      "bucket": "via-maris-in-use",
+      "accessKeyIdEnv": "IN_USE_ACCESS_KEY_ID",
+      "secretAccessKeyEnv": "IN_USE_SECRET_ACCESS_KEY"
+    },
+    "object": "in-use.json",
+    "refresh": "5m",
+    "maxAge": "1h"
+  },
+  "records": {
+    "store": {
+      "endpoint": "https://records-store.example.com",
+      "region": "auto",
+      "bucket": "via-maris-records",
+      "accessKeyIdEnv": "RECORDS_ACCESS_KEY_ID",
+      "secretAccessKeyEnv": "RECORDS_SECRET_ACCESS_KEY"
+    },
+    "prefix": "records/",
+    "interval": "10s",
+    "maxUnshipped": "5m"
+  },
+  "upstreams": [
+    {
+      "name": "npm",
+      "ecosystem": "npm",
+      "url": "https://registry.npmjs.org",
+      "hold": "168h",
+      "advisories": "malicious",
+      "exceptions": [
+        {
+          "package": "example-package",
+          "version": "1.2.3",
+          "reason": "needed before the hold ends to ship a fix",
+          "reviewed": "https://github.com/example/config/pull/1",
+          "expires": "2026-12-01"
+        }
+      ]
+    },
+    {
+      "name": "pypi",
+      "ecosystem": "PyPI",
+      "url": "https://pypi.org",
+      "files": "https://files.pythonhosted.org",
+      "hold": "168h",
+      "advisories": "malicious"
+    },
+    {
+      "name": "go",
+      "ecosystem": "Go",
+      "url": "https://proxy.golang.org",
+      "index": "https://index.golang.org",
+      "sumdb": "https://sum.golang.org",
+      "indexPoll": "1m",
+      "indexMaxAge": "5m",
+      "hold": "168h",
+      "advisories": "malicious"
+    },
+    {
+      "name": "apt",
+      "ecosystem": "apt",
+      "url": "https://snapshot.ubuntu.com",
+      "hold": "168h"
+    },
+    {
+      "name": "files",
+      "ecosystem": "files",
+      "pinned": [
+        {
+          "name": "go/go1.27.3.linux-amd64.tar.gz",
+          "url": "https://go.dev/dl/go1.27.3.linux-amd64.tar.gz",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ]
+    }
+  ]
+}
