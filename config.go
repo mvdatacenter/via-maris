@@ -139,6 +139,9 @@ func (s *Store) validate(where string) error {
 			return fmt.Errorf("%s.store names both endpoint and endpointEnv", where)
 		}
 		s.Endpoint = os.Getenv(s.EndpointEnv)
+		if !httpURL(s.Endpoint) {
+			return fmt.Errorf("%s.store: endpointEnv names %s, which must be set to an http(s) endpoint without a trailing slash", where, s.EndpointEnv)
+		}
 	}
 	if !httpURL(s.Endpoint) || s.Region == "" || s.Bucket == "" {
 		return fmt.Errorf("%s.store needs an http(s) endpoint without a trailing slash, a region and a bucket", where)

@@ -70,7 +70,7 @@ func TestConfigRefusals(t *testing.T) {
 		}, "records.store names both endpoint and endpointEnv"},
 		{"unset endpoint", func(c map[string]any) {
 			c["records"].(map[string]any)["store"].(map[string]any)["endpointEnv"] = "VIA_MARIS_TEST_UNSET"
-		}, "records.store needs an http(s) endpoint"},
+		}, "records.store: endpointEnv names VIA_MARIS_TEST_UNSET, which must be set to an http(s) endpoint"},
 		{"records bound below interval", func(c map[string]any) { c["records"].(map[string]any)["maxUnshipped"] = "5s" }, "records.maxUnshipped must exceed"},
 		{"repeated name", func(c map[string]any) { upstreamAt(c, 1)["name"] = "npm" }, `upstream name "npm"`},
 		{"reserved name", func(c map[string]any) { upstreamAt(c, 0)["name"] = "metrics" }, `upstream name "metrics"`},
