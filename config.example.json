@@ -19,7 +19,7 @@
   },
   "records": {
     "store": {
-      "endpoint": "https://records-store.example.com",
+      "endpointEnv": "RECORDS_ENDPOINT",
       "region": "auto",
       "bucket": "via-maris-records",
       "accessKeyIdEnv": "RECORDS_ACCESS_KEY_ID",
