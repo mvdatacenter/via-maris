@@ -25,6 +25,22 @@ func TestExampleConfigLoads(t *testing.T) {
 	}
 }
 
+func TestEndpointFromEnvironment(t *testing.T) {
+	setExampleKeys(t)
+	t.Setenv("RECORDS_ENDPOINT", "https://account.records.example")
+	cfg, err := loadConfig(writeVariant(t, func(c map[string]any) {
+		st := c["records"].(map[string]any)["store"].(map[string]any)
+		delete(st, "endpoint")
+		st["endpointEnv"] = "RECORDS_ENDPOINT"
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := newObjectStore(cfg.Records.Store, nil).objectURL("k"); got != "https://account.records.example/via-maris-records/k" {
+		t.Errorf("object URL %s", got)
+	}
+}
+
 func writeVariant(t *testing.T, edit func(c map[string]any)) string {
 	t.Helper()
 	b, err := os.ReadFile("config.example.json")
@@ -61,6 +77,14 @@ func TestConfigRefusals(t *testing.T) {
 		{"unset key", func(c map[string]any) {
 			c["records"].(map[string]any)["store"].(map[string]any)["secretAccessKeyEnv"] = "VIA_MARIS_TEST_UNSET"
 		}, "records.store: accessKeyIdEnv and secretAccessKeyEnv must name environment variables that are set"},
+		{"both endpoints", func(c map[string]any) {
+			c["records"].(map[string]any)["store"].(map[string]any)["endpointEnv"] = "RECORDS_ENDPOINT"
+		}, "records.store names both endpoint and endpointEnv"},
+		{"unset endpoint", func(c map[string]any) {
+			st := c["records"].(map[string]any)["store"].(map[string]any)
+			delete(st, "endpoint")
+			st["endpointEnv"] = "VIA_MARIS_TEST_UNSET"
+		}, "records.store needs an http(s) endpoint"},
 		{"records bound below interval", func(c map[string]any) { c["records"].(map[string]any)["maxUnshipped"] = "5s" }, "records.maxUnshipped must exceed"},
 		{"repeated name", func(c map[string]any) { upstreamAt(c, 1)["name"] = "npm" }, `upstream name "npm"`},
 		{"reserved name", func(c map[string]any) { upstreamAt(c, 0)["name"] = "metrics" }, `upstream name "metrics"`},

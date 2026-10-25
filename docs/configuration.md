@@ -16,7 +16,7 @@ docker run -p 8480:8480 -v "$PWD/config.json:/etc/via-maris/config.json:ro" via-
 - `records`: where decision records are uploaded, as NDJSON batches under `prefix`. A record is written to stdout for every decision. Once the oldest unshipped record is older than `maxUnshipped`, every request is answered 503.
 - `upstreams`: one entry per registry fronted, served under `/<name>/`.
 
-The access keys for both stores are read from the environment variables the store names.
+The access keys for both stores are read from the environment variables the store names. A store's endpoint is given either as `endpoint` or, when it carries a value kept out of the configuration such as an account id, as `endpointEnv`, the environment variable that holds it.
 
 ## Upstream policy
 
