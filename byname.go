@@ -108,9 +108,9 @@ func (b *byName) index(w http.ResponseWriter, r *http.Request) {
 	case len(parts) == 2 && parts[0] == "simple":
 		b.g.pypiSimple(w, r, b.up, normalizePyPI(parts[1]), func(rel string) string { return b.up.Files + "/" + rel })
 	case len(parts) == 3 && parts[0] == "pypi" && parts[2] == "json":
-		b.g.pypiJSON(w, r, b.up, normalizePyPI(parts[1]), "/pypi/"+parts[1]+"/json")
+		b.g.pypiJSON(w, r, b.up, normalizePyPI(parts[1]), "/pypi/"+url.PathEscape(parts[1])+"/json")
 	case len(parts) == 4 && parts[0] == "pypi" && parts[3] == "json":
-		b.g.pypiJSON(w, r, b.up, normalizePyPI(parts[1]), "/pypi/"+parts[1]+"/"+parts[2]+"/json")
+		b.g.pypiJSON(w, r, b.up, normalizePyPI(parts[1]), "/pypi/"+url.PathEscape(parts[1])+"/"+url.PathEscape(parts[2])+"/json")
 	default:
 		http.NotFound(w, r)
 	}

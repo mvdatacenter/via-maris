@@ -236,6 +236,14 @@ func TestByNameJSONAPIYanksRefusedFiles(t *testing.T) {
 	}
 }
 
+func TestByNameJSONAPIEscapesPathSegmentsUpstream(t *testing.T) {
+	env := newByNameEnv(t, map[string]time.Duration{"boto3-1.0.0-py3-none-any.whl": 100 * day})
+	resp, body := fetchBody(t, env.mapped(), "https://pypi.test/pypi/boto3/json%3F/json")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("%d %s, want 404: a decoded ? must not reach the upstream as a query", resp.StatusCode, body)
+	}
+}
+
 func TestByNameRefusesOtherNames(t *testing.T) {
 	env := newByNameEnv(t, map[string]time.Duration{"boto3-1.0.0-py3-none-any.whl": 100 * day})
 
