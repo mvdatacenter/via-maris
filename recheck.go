@@ -414,22 +414,22 @@ func inUseVersions(locked []lockedPackage, served map[string]map[string]map[stri
 	return out
 }
 
-func readInUse(ctx context.Context, store *objectStore, object string) (*inUseObject, error) {
-	body, err := store.get(ctx, object)
+func readInUse(ctx context.Context, store *objectStore, object string) (*inUseObject, string, error) {
+	body, etag, err := store.getTagged(ctx, object)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer body.Close()
 	var o inUseObject
 	if err := json.NewDecoder(body).Decode(&o); err != nil {
-		return nil, fmt.Errorf("%s: %w", object, err)
+		return nil, etag, fmt.Errorf("%s: %w", object, err)
 	}
-	return &o, nil
+	return &o, etag, nil
 }
 
 type recheckSources struct {
 	fetchAll func(ctx context.Context, root string) (int, error)
-	scan     func(ctx context.Context, root string) ([]lockedPackage, error)
+	scan     func(ctx context.Context, root, tmp string) ([]lockedPackage, error)
 }
 
 type recheckRun struct {
@@ -483,8 +483,8 @@ func newRecheckRun(cfg *RecheckConfig, client *http.Client) (*recheckRun, error)
 			}
 			return n, nil
 		},
-		scan: func(ctx context.Context, root string) ([]lockedPackage, error) {
-			return scanLockfiles(ctx, cfg.OSVScanner, root, filepath.Join(cfg.WorkDir, "tmp"))
+		scan: func(ctx context.Context, root, tmp string) ([]lockedPackage, error) {
+			return scanLockfiles(ctx, cfg.OSVScanner, root, tmp)
 		},
 	}
 	return run, nil
@@ -497,12 +497,14 @@ func (r *recheckRun) run(ctx context.Context) error {
 			return fmt.Errorf("advisories %s: %w", eco, err)
 		}
 	}
-	root := filepath.Join(r.cfg.WorkDir, "src")
-	if err := os.RemoveAll(root); err != nil {
+	work, err := os.MkdirTemp(r.cfg.WorkDir, "pass-")
+	if err != nil {
 		return err
 	}
-	for _, dir := range []string{root, filepath.Join(r.cfg.WorkDir, "tmp")} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+	defer os.RemoveAll(work)
+	root, tmp := filepath.Join(work, "src"), filepath.Join(work, "tmp")
+	for _, dir := range []string{root, tmp} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
 			return err
 		}
 	}
@@ -510,7 +512,7 @@ func (r *recheckRun) run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	locked, err := r.src.scan(ctx, root)
+	locked, err := r.src.scan(ctx, root, tmp)
 	if err != nil {
 		return err
 	}
@@ -527,10 +529,18 @@ func (r *recheckRun) run(ctx context.Context) error {
 		return err
 	}
 
-	prev, err := readInUse(ctx, r.inUse, r.cfg.InUse.Object)
-	if err != nil {
+	prev, etag, err := readInUse(ctx, r.inUse, r.cfg.InUse.Object)
+	condition, value := "If-Match", etag
+	switch {
+	case errors.Is(err, errNoObject):
+		condition, value = "If-None-Match", "*"
+		fallthrough
+	case err != nil && etag != "":
 		log.Printf("recheck: the previous in-use set is unreadable, so the served versions are rebuilt from %s of records: %v", r.cfg.ServedWindow.Duration, err)
-		prev = nil
+	case err != nil:
+		return fmt.Errorf("reading the previous in-use set: %w", err)
+	case etag == "":
+		return fmt.Errorf("the store returned %s without an ETag, so this pass cannot write it without risking a newer set", r.cfg.InUse.Object)
 	}
 	served, through, objects, err := readServed(ctx, r.records, r.cfg.Records.Prefix, r.cfg.Records.Overlap.Duration, r.cfg.ServedWindow.Duration, prev, start)
 	if err != nil {
@@ -546,7 +556,10 @@ func (r *recheckRun) run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := r.inUse.put(ctx, r.cfg.InUse.Object, "application/json", body); err != nil {
+	if err := r.inUse.putIf(ctx, r.cfg.InUse.Object, "application/json", body, condition, value); err != nil {
+		if errors.Is(err, errObjectChanged) {
+			return fmt.Errorf("another pass wrote %s after this one read it, so this pass's set is dropped: %w", r.cfg.InUse.Object, err)
+		}
 		return err
 	}
 	n := 0

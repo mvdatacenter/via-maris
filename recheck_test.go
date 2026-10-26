@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -146,7 +147,6 @@ type recheckEnv struct {
 	osv    *osvExport
 	store  *fakeStore
 	locked []lockedPackage
-	root   string
 }
 
 func newRecheckEnv(t *testing.T) *recheckEnv {
@@ -183,8 +183,7 @@ func newRecheckEnv(t *testing.T) *recheckEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env.root = filepath.Join(cfg.WorkDir, "src")
-	env.run.src.scan = func(ctx context.Context, root string) ([]lockedPackage, error) {
+	env.run.src.scan = func(ctx context.Context, root, tmp string) ([]lockedPackage, error) {
 		var out []lockedPackage
 		for _, p := range env.locked {
 			if _, err := os.Stat(filepath.Join(root, p.Repository, p.Lockfile)); err == nil {
@@ -291,6 +290,10 @@ func TestRecheckAlertsOnALockedMaliciousVersionAndWritesTheInUseSet(t *testing.T
 		t.Errorf("in-use ecosystems\n got %s\nwant %s", got, wantJSON)
 	}
 
+	if left, err := os.ReadDir(env.run.cfg.WorkDir); err != nil || len(left) != 0 {
+		t.Errorf("the pass left %v in workDir (%v)", left, err)
+	}
+
 	set := &inUseSet{store: env.run.inUse, object: "in-use.json"}
 	if err := set.load(context.Background()); err != nil {
 		t.Fatal(err)
@@ -355,6 +358,47 @@ func TestRecheckRebuildsServedVersionsWhenThePreviousSetIsLost(t *testing.T) {
 	got := env.inUse().Ecosystems["npm"]["p"]
 	if strings.Join(got, ",") != "2h0m0s,480h0m0s,72h0m0s" {
 		t.Errorf("rebuilt served versions %v, want the three inside 30 days", got)
+	}
+}
+
+func TestAPassDropsItsSetWhenAnotherPassWroteFirst(t *testing.T) {
+	newer := []byte(`{"generated":"2026-10-26T12:00:00Z"}`)
+	for name, previous := range map[string][]byte{
+		"over the set it read": []byte(`{"generated":"2026-10-25T00:00:00Z"}`),
+		"where it read none":   nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := newRecheckEnv(t)
+			if previous != nil {
+				env.store.put("/bucket/in-use.json", previous)
+			}
+			env.store.beforePut = func(objects map[string][]byte, key string) {
+				if key == "/bucket/in-use.json" {
+					objects[key] = newer
+				}
+			}
+			err := env.run.run(context.Background())
+			if !errors.Is(err, errObjectChanged) {
+				t.Fatalf("run: %v, want the write refused", err)
+			}
+			if o := env.inUse(); !o.Generated.Equal(time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)) {
+				t.Errorf("the newer set was replaced, generated %s", o.Generated)
+			}
+		})
+	}
+}
+
+func TestAnUnreachableStoreFailsTheRunRatherThanRebuilding(t *testing.T) {
+	env := newRecheckEnv(t)
+	env.store.put("/bucket/in-use.json", []byte(`{"generated":"2026-10-25T00:00:00Z"}`))
+	env.store.setFail(true)
+	err := env.run.run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "reading the previous in-use set") {
+		t.Fatalf("run with the store down: %v", err)
+	}
+	env.store.setFail(false)
+	if o := env.inUse(); !o.Generated.Equal(time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("the previous set was replaced, generated %s", o.Generated)
 	}
 }
 

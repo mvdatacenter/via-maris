@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,30 +38,51 @@ func (s *objectStore) objectURL(key string) string {
 	return s.endpoint + "/" + s3Escape(s.bucket) + "/" + s3Escape(key)
 }
 
+var (
+	errNoObject      = errors.New("no such object")
+	errObjectChanged = errors.New("the object changed since it was read")
+)
+
 func (s *objectStore) get(ctx context.Context, key string) (io.ReadCloser, error) {
+	body, _, err := s.getTagged(ctx, key)
+	return body, err
+}
+
+func (s *objectStore) getTagged(ctx context.Context, key string) (io.ReadCloser, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.objectURL(key), nil)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	s.sign(req, emptySHA256, time.Now())
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		resp.Body.Close()
-		return nil, fmt.Errorf("GET %s/%s: %s %s", s.bucket, key, resp.Status, strings.TrimSpace(string(body)))
+		err := fmt.Errorf("GET %s/%s: %s %s", s.bucket, key, resp.Status, strings.TrimSpace(string(body)))
+		if resp.StatusCode == http.StatusNotFound {
+			err = fmt.Errorf("%w: %w", errNoObject, err)
+		}
+		return nil, "", err
 	}
-	return resp.Body, nil
+	return resp.Body, resp.Header.Get("ETag"), nil
 }
 
 func (s *objectStore) put(ctx context.Context, key, contentType string, body []byte) error {
+	return s.putIf(ctx, key, contentType, body, "", "")
+}
+
+func (s *objectStore) putIf(ctx context.Context, key, contentType string, body []byte, condition, value string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, s.objectURL(key), bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", contentType)
+	if condition != "" {
+		req.Header.Set(condition, value)
+	}
 	sum := sha256.Sum256(body)
 	s.sign(req, hex.EncodeToString(sum[:]), time.Now())
 	resp, err := s.client.Do(req)
@@ -68,6 +90,9 @@ func (s *objectStore) put(ctx context.Context, key, contentType string, body []b
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusPreconditionFailed {
+		return fmt.Errorf("PUT %s/%s: %w", s.bucket, key, errObjectChanged)
+	}
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("PUT %s/%s: %s %s", s.bucket, key, resp.Status, strings.TrimSpace(string(msg)))

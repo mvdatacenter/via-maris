@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,10 +20,13 @@ import (
 // fakeStore is an S3-compatible bucket in memory. It checks that every
 // request carries a signature for the expected key, and fails on demand.
 type fakeStore struct {
-	mu      sync.Mutex
-	objects map[string][]byte
-	fail    bool
+	mu        sync.Mutex
+	objects   map[string][]byte
+	fail      bool
+	beforePut func(objects map[string][]byte, key string)
 }
+
+func etagOf(b []byte) string { return fmt.Sprintf("%q", fmt.Sprintf("%x", sha256.Sum256(b))) }
 
 func newFakeStore(t *testing.T) (*fakeStore, *httptest.Server) {
 	s := &fakeStore{objects: map[string][]byte{}}
@@ -40,6 +44,15 @@ func newFakeStore(t *testing.T) (*fakeStore, *httptest.Server) {
 		switch r.Method {
 		case http.MethodPut:
 			b, _ := io.ReadAll(r.Body)
+			if s.beforePut != nil {
+				s.beforePut(s.objects, r.URL.Path)
+			}
+			cur, exists := s.objects[r.URL.Path]
+			if m := r.Header.Get("If-Match"); m != "" && (!exists || m != etagOf(cur)) ||
+				r.Header.Get("If-None-Match") == "*" && exists {
+				w.WriteHeader(http.StatusPreconditionFailed)
+				return
+			}
 			s.objects[r.URL.Path] = b
 		case http.MethodGet:
 			if r.URL.Query().Get("list-type") == "2" {
@@ -51,6 +64,7 @@ func newFakeStore(t *testing.T) (*fakeStore, *httptest.Server) {
 				http.NotFound(w, r)
 				return
 			}
+			w.Header().Set("ETag", etagOf(b))
 			w.Write(b)
 		}
 	}))
