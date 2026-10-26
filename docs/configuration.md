@@ -46,6 +46,12 @@ With the gateway at `http://via-maris:8480` and the upstream names from the exam
 | apt | `deb http://via-maris:8480/apt/ubuntu <suite> main` |
 | files | `http://via-maris:8480/files/<pinned name>` |
 
+The checks differ by front end:
+
+- **npm, PyPI and Go** are checked one version at a time.
+- **apt** is served from a dated archive snapshot taken one hold back.
+- **files** serves only names that are pinned to a SHA-256 digest.
+
 ## PyPI by its own names
 
 A uv lockfile records the index it was resolved at and each file's URL, so a lock resolved at `pypi.org` names `pypi.org` and `files.pythonhosted.org` whatever index the machine installing it is set to. `byName` lets those installs reach the check with the lock unchanged. The gateway answers TLS for the two host names of the upstream's `url` and `files` and serves them as the upstream does:
@@ -65,12 +71,6 @@ A client reaches it in either of two ways:
 | pip | `proxy = http://via-maris:8480` and `cert = <bundle with the CA>` in `pip.conf`, with no index |
 
 Every client that installs through `byName` trusts the CA in `ca`, so that CA should carry name constraints permitting the two host names alone. The gateway reads the leaf, key and CA from files and checks them on each handshake, so a certificate manager that replaces them on renewal needs no restart. A pair that fails to load leaves the previous one in use. Until a pair has loaded, `/healthz` reports the TLS certificate as not ready and the listener refuses handshakes. The listener speaks HTTP/1.1 alone, so a refusal reaches pip in the status line.
-
-The checks differ by front end:
-
-- **npm, PyPI and Go** are checked one version at a time.
-- **apt** is served from a dated archive snapshot taken one hold back.
-- **files** serves only names that are pinned to a SHA-256 digest.
 
 ## Operating
 
