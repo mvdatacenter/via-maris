@@ -119,26 +119,46 @@ func TestGoChecksEachVersionByWhenTheProxyFirstServedIt(t *testing.T) {
 	f.versions["example.com/Mod@v1.1.0"] = time.Now().Add(-time.Hour) // inside the hold
 	f.versions["example.com/Mod@v1.2.0"] = time.Time{}                // never fetched yet
 	f.versions["github.com/boltdb-go/bolt@v1.3.1"] = time.Now().Add(-30 * day)
-	env := goEnv(t, f, osvJSON("MAL-2025-2545", "Go", "github.com/boltdb-go/bolt", []string{"v1.3.1"}))
+	f.versions["github.com/boltdb-go/bolt@v1.3.2"] = time.Now().Add(-time.Hour)
+	env := goEnv(t, f, osvJSON("MAL-2025-2545", "Go", "github.com/boltdb-go/bolt", []string{"v1.3.1", "v1.3.2"}))
 	loadIndex(t, env)
 
 	status, body := env.get("/go/example.com/!mod/@v/v1.0.0.zip")
 	if status != http.StatusOK || body != "example.com/Mod v1.0.0.zip" {
 		t.Errorf("old version: %d %q", status, body)
 	}
+	if p := env.lastRecord().Published; p != "" {
+		t.Errorf("old version published %q, want none: the window start only bounds it", p)
+	}
 	status, body = env.get("/go/example.com/!mod/@v/v1.1.0.info")
 	if status != http.StatusForbidden {
 		t.Errorf("version inside the hold: %d", status)
 	}
 	wantContains(t, body, "via-maris refused example.com/Mod@v1.1.0: published ", "release-age hold")
+	if p, err := time.Parse(time.RFC3339Nano, env.lastRecord().Published); err != nil || time.Since(p).Round(time.Hour) != time.Hour {
+		t.Errorf("version inside the hold published %v, want its index time, an hour ago", p)
+	}
 	status, body = env.get("/go/example.com/!mod/@v/v1.2.0.mod")
 	if status != http.StatusForbidden {
 		t.Errorf("version first fetched now: %d", status)
 	}
 	wantContains(t, body, "release-age hold")
+	if p, err := time.Parse(time.RFC3339Nano, env.lastRecord().Published); err != nil || time.Since(p).Round(time.Hour) != 0 {
+		t.Errorf("version first fetched now published %v", p)
+	}
 	status, body = env.get("/go/github.com/boltdb-go/bolt/@v/v1.3.1.info")
 	if status != http.StatusForbidden || !strings.Contains(body, "listed as malicious by MAL-2025-2545") {
 		t.Errorf("listed version: %d %q", status, body)
+	}
+	if p := env.lastRecord().Published; p != "" {
+		t.Errorf("listed version before the window published %q, want none", p)
+	}
+	status, body = env.get("/go/github.com/boltdb-go/bolt/@v/v1.3.2.info")
+	if status != http.StatusForbidden || !strings.Contains(body, "listed as malicious by MAL-2025-2545") {
+		t.Errorf("listed version inside the window: %d %q", status, body)
+	}
+	if p, err := time.Parse(time.RFC3339Nano, env.lastRecord().Published); err != nil || time.Since(p).Round(time.Hour) != time.Hour {
+		t.Errorf("listed version inside the window published %v, want its index time, an hour ago", p)
 	}
 
 	// A version the proxy does not have passes its 404 on, so the go

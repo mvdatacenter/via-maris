@@ -219,13 +219,13 @@ func (e *goMissing) Error() string { return fmt.Sprintf("upstream answered %d", 
 // goPublished is when the proxy first served mod@ver, or an upper bound on
 // it: the window start for a version it held before the window. A version
 // it has never served is first served now.
-func (g *gateway) goPublished(ctx context.Context, up *Upstream, ix *goIndex, modEsc, verEsc, mod, ver string) (time.Time, error) {
+func (g *gateway) goPublished(ctx context.Context, up *Upstream, ix *goIndex, modEsc, verEsc, mod, ver string) (t time.Time, exact bool, err error) {
 	if t, ok := ix.firstSeen(mod, ver); ok {
-		return t, nil
+		return t, true, nil
 	}
 	resp, err := g.fetch(ctx, up.URL+"/cached-only/"+modEsc+"/@v/"+verEsc+".info", "")
 	if err != nil {
-		return time.Time{}, err
+		return time.Time{}, false, err
 	}
 	io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
@@ -235,30 +235,30 @@ func (g *gateway) goPublished(ctx context.Context, up *Upstream, ix *goIndex, mo
 		// more, so a version first served since the last poll is not taken
 		// for an old one.
 		if err := ix.read(ctx); err != nil {
-			return time.Time{}, err
+			return time.Time{}, false, err
 		}
 		if t, ok := ix.firstSeen(mod, ver); ok {
-			return t, nil
+			return t, true, nil
 		}
-		return ix.windowStart(), nil
+		return ix.windowStart(), false, nil
 	case http.StatusNotFound, http.StatusGone:
 		// Never served: ask the proxy for it, so the hold counts from now,
 		// and pass on its answer when it has no such version.
 		resp, err := g.fetch(ctx, up.URL+"/"+modEsc+"/@v/"+verEsc+".info", "")
 		if err != nil {
-			return time.Time{}, err
+			return time.Time{}, false, err
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		resp.Body.Close()
 		switch resp.StatusCode {
 		case http.StatusOK:
-			return time.Now(), nil
+			return time.Now(), true, nil
 		case http.StatusNotFound, http.StatusGone:
-			return time.Time{}, &goMissing{resp.StatusCode, body}
+			return time.Time{}, false, &goMissing{resp.StatusCode, body}
 		}
-		return time.Time{}, fmt.Errorf("the proxy answered %s", resp.Status)
+		return time.Time{}, false, fmt.Errorf("the proxy answered %s", resp.Status)
 	}
-	return time.Time{}, fmt.Errorf("cached-only answered %s", resp.Status)
+	return time.Time{}, false, fmt.Errorf("cached-only answered %s", resp.Status)
 }
 
 func (g *gateway) gomod(w http.ResponseWriter, r *http.Request, up *Upstream, ix *goIndex) {
@@ -335,9 +335,12 @@ func (g *gateway) gomod(w http.ResponseWriter, r *http.Request, up *Upstream, ix
 
 func (g *gateway) goCheck(ctx context.Context, up *Upstream, ix *goIndex, modEsc, verEsc, mod, ver string) (verdict, *goMissing) {
 	if vd, ok := g.advisoryRefusal(up, mod, ver); !ok {
+		// The window alone is read: asking the proxy would have it fetch the
+		// refused version.
+		vd.Published, _ = ix.firstSeen(mod, ver)
 		return vd, nil
 	}
-	t, err := g.goPublished(ctx, up, ix, modEsc, verEsc, mod, ver)
+	t, exact, err := g.goPublished(ctx, up, ix, modEsc, verEsc, mod, ver)
 	var missing *goMissing
 	if errors.As(err, &missing) {
 		return verdict{Served: false, Reason: "the upstream has no such version"}, missing
@@ -345,7 +348,11 @@ func (g *gateway) goCheck(ctx context.Context, up *Upstream, ix *goIndex, modEsc
 	if err != nil {
 		return verdict{Served: false, Reason: "the first-served time could not be read: " + err.Error()}, nil
 	}
-	return g.check(up, mod, ver, t), nil
+	vd := g.check(up, mod, ver, t)
+	if !exact {
+		vd.Published = time.Time{}
+	}
+	return vd, nil
 }
 
 // goList serves the version list without the refused versions, dating each
