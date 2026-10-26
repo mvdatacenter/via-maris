@@ -8,7 +8,7 @@ docker build -t via-maris .
 docker run -p 8480:8480 -v "$PWD/config.json:/etc/via-maris/config.json:ro" via-maris
 ```
 
-Each `v*` tag publishes `ghcr.io/mvdatacenter/via-maris:<tag>`, and the re-check's image as `ghcr.io/mvdatacenter/via-maris:<tag>-recheck`, both built with the tag as the version that `/healthz` and `/metrics` report and signed by this repository's release workflow with cosign keyless signing. This checks the signature:
+Each `v*` tag publishes the gateway as `ghcr.io/mvdatacenter/via-maris:<tag>`, built with the tag as the version that `/healthz` and `/metrics` report, and the re-check as `ghcr.io/mvdatacenter/via-maris:<tag>-recheck`. This repository's release workflow signs both with cosign keyless signing. This checks the gateway's signature, and the same command naming `:<tag>-recheck` checks the re-check's:
 
 ```
 cosign verify ghcr.io/mvdatacenter/via-maris:<tag> \
