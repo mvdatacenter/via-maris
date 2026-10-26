@@ -1,0 +1,39 @@
+{
+  "advisories": {
+    "source": "https://osv-vulnerabilities.storage.googleapis.com"
+  },
+  "ecosystems": ["npm", "PyPI", "Go"],
+  "github": {
+    "api": "https://api.github.com",
+    "owner": "mvdatacenter",
+    "appIdEnv": "GITHUB_APP_ID",
+    "installationIdEnv": "GITHUB_APP_INSTALLATION_ID",
+    "privateKeyEnv": "GITHUB_APP_PRIVATE_KEY"
+  },
+  "osvScanner": "/osv-scanner",
+  "workDir": "/work",
+  "alertmanager": "http://alertmanager.example:9093",
+  "alertFor": "45m",
+  "inUse": {
+    "store": {
+      "endpoint": "https://in-use-store.example.com",
+      "region": "us-east-1",
+      "bucket": "via-maris-in-use",
+      "accessKeyIdEnv": "IN_USE_ACCESS_KEY_ID",
+      "secretAccessKeyEnv": "IN_USE_SECRET_ACCESS_KEY"
+    },
+    "object": "in-use.json"
+  },
+  "records": {
+    "store": {
+      "endpointEnv": "RECORDS_ENDPOINT",
+      "region": "auto",
+      "bucket": "via-maris-records",
+      "accessKeyIdEnv": "RECORDS_ACCESS_KEY_ID",
+      "secretAccessKeyEnv": "RECORDS_SECRET_ACCESS_KEY"
+    },
+    "prefix": "records/",
+    "overlap": "10m"
+  },
+  "servedWindow": "720h"
+}

@@ -1,6 +1,6 @@
 # Configuring and pointing clients at via-maris
 
-`via-maris` is a single Go program built from the standard library alone. It reads one JSON file, named as its only argument. [`config.example.json`](../config.example.json) carries every field. A configuration with an unknown field or one that fails validation stops the gateway at startup.
+`via-maris` is a single Go program built from the standard library alone. The gateway reads one JSON file, named as its only argument. [`config.example.json`](../config.example.json) carries every field. A configuration with an unknown field or one that fails validation stops the gateway at startup. `via-maris recheck <recheck.json>` runs the re-check instead, as [The re-check](#the-re-check) describes.
 
 ```
 go test ./...
@@ -20,7 +20,7 @@ cosign verify ghcr.io/mvdatacenter/via-maris:<tag> \
 
 - `listen`: the address to serve on, `:8480` in the example.
 - `advisories`: where the OSV per-ecosystem `all.zip` exports are read from. `refresh` sets how often they are re-read. `maxAge` sets how old the loaded data may be before every checked request is refused.
-- `inUse`: an object in an S3-compatible store that lists the versions already in use, shaped `{"generated": "<RFC 3339>", "ecosystems": {"npm": {"<package>": ["<version>"]}}}`. A version inside the hold is served when it fixes an advisory against a version in that list. `maxAge` bounds how stale the object may be.
+- `inUse`: an object in an S3-compatible store that lists the versions already in use, shaped `{"generated": "<RFC 3339>", "ecosystems": {"npm": {"<package>": ["<version>"]}}}`. The re-check writes it. A version inside the hold is served when it fixes an advisory against a version in that list. `maxAge` bounds how stale the object may be.
 - `records`: where decision records are uploaded, as NDJSON batches under `prefix`. A record is written to stdout for every decision. Once the oldest unshipped record is older than `maxUnshipped`, every request is answered 503.
 - `upstreams`: one entry per registry fronted, served under `/<name>/`.
 
@@ -56,3 +56,16 @@ The checks differ by front end:
 - `GET /metrics` serves Prometheus text.
 
 A refused version is answered 403, with the refusal reason in the response.
+
+## The re-check
+
+`via-maris recheck <recheck.json>` makes one pass and exits, so a scheduler runs it on an interval. [`recheck.example.json`](../recheck.example.json) carries every field. A pass:
+
+1. Loads the OSV exports for each of `ecosystems` from `advisories.source`, the same exports the gateway reads.
+2. Mints an installation token for the GitHub App that `github` names, asking for Contents read alone. The App's id, installation id and PEM private key are read from the environment variables the section names.
+3. Downloads the default branch of every repository the installation reaches under `github.owner`, leaving out archived ones, into `workDir`. Only regular files and directories are written.
+4. Runs the OSV-Scanner binary at `osvScanner` over them to list every locked package version. OSV-Scanner's own vulnerability matching is switched off. The versions are matched against the exports by the gateway's own check, so a lockfile entry is judged exactly as an install of it would be.
+5. Posts one `LockedVersionListedMalicious` alert per repository, lockfile, package, version and advisory to `alertmanager`, at severity `critical`. Each alert ends `alertFor` after the pass, so it stays firing while every pass finds the version and resolves once passes stop finding it. `alertFor` should exceed the interval between passes.
+6. Writes the in-use set to `inUse`: every locked version, and every version the gateway served within `servedWindow`, read from the decision records under `records`. Only records uploaded since the last pass are read, starting `records.overlap` earlier to catch a slow upload. When the previous set cannot be read, the whole window is read again. The set is stamped with the time the pass started.
+
+Any failure exits non-zero and leaves the previous set in place, where the gateway's `inUse.maxAge` reads its age. The image carries OSV-Scanner at `/osv-scanner`. Neither binary has a writable directory of its own, so `workDir` must be a mounted writable volume.

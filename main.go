@@ -206,20 +206,26 @@ func (g *gateway) start(ctx context.Context) {
 }
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: via-maris <config.json>")
-		os.Exit(2)
-	}
-	cfg, err := loadConfig(os.Args[1])
-	if err != nil {
-		log.Fatal(err)
-	}
 	client := &http.Client{Transport: &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		ResponseHeaderTimeout: 60 * time.Second,
 		IdleConnTimeout:       90 * time.Second,
 		MaxIdleConnsPerHost:   32,
 	}}
+	if len(os.Args) == 3 && os.Args[1] == "recheck" {
+		if err := recheckMain(os.Args[2], client); err != nil {
+			log.Fatalf("recheck: %v", err)
+		}
+		return
+	}
+	if len(os.Args) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: via-maris <config.json>\n       via-maris recheck <recheck.json>")
+		os.Exit(2)
+	}
+	cfg, err := loadConfig(os.Args[1])
+	if err != nil {
+		log.Fatal(err)
+	}
 	g, err := newGateway(cfg, client, os.Stdout)
 	if err != nil {
 		log.Fatal(err)
