@@ -12,4 +12,4 @@ We acknowledge a report within three working days and tell you the planned fix o
 
 ## Supported versions
 
-There is no release yet. Once releases exist, security fixes go to the latest release.
+Security fixes go to the latest release. Each release is a `v*` tag and the signed image that tag publishes, as [docs/configuration.md](docs/configuration.md) describes.
