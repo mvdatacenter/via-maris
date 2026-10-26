@@ -34,6 +34,6 @@ func (g *gateway) apt(w http.ResponseWriter, r *http.Request, up *Upstream) {
 			kind, pkg, ver = "artifact", fields[0], fields[1]
 		}
 	}
-	g.record(r, up, kind, pkg, ver, verdict{true, "snapshot " + snap})
+	g.record(r, up, kind, pkg, ver, verdict{Served: true, Reason: "snapshot " + snap})
 	g.stream(w, r, up.URL+"/"+archive+"/"+snap+"/"+(&url.URL{Path: p}).EscapedPath())
 }

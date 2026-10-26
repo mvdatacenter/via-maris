@@ -109,7 +109,7 @@ func (g *gateway) gated(up *Upstream, h http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if reason := g.recordsBehind(); reason != "" {
-			g.record(r, up, "request", r.URL.Path, "", verdict{false, reason})
+			g.record(r, up, "request", r.URL.Path, "", verdict{Served: false, Reason: reason})
 			http.Error(w, "via-maris refused this request: "+reason, http.StatusServiceUnavailable)
 			return
 		}

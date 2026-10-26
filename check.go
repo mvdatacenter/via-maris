@@ -6,8 +6,9 @@ import (
 )
 
 type verdict struct {
-	Served bool
-	Reason string
+	Served    bool
+	Reason    string
+	Published time.Time
 }
 
 func refusal(pkg, version string, v verdict) string {
@@ -16,20 +17,20 @@ func refusal(pkg, version string, v verdict) string {
 
 func (g *gateway) advisoryRefusal(up *Upstream, pkg, version string) (verdict, bool) {
 	if why := g.advisoriesUnusable(up.Ecosystem); why != "" {
-		return verdict{false, why}, false
+		return verdict{Served: false, Reason: why}, false
 	}
 	for _, a := range g.db.lookup(up.Ecosystem, pkg) {
 		if !a.affects(up.Ecosystem, version) {
 			continue
 		}
 		if a.Malicious {
-			return verdict{false, fmt.Sprintf("listed as malicious by %s", a.ID)}, false
+			return verdict{Served: false, Reason: fmt.Sprintf("listed as malicious by %s", a.ID)}, false
 		}
 		if up.Advisories == "all" {
-			return verdict{false, fmt.Sprintf("carries advisory %s", a.ID)}, false
+			return verdict{Served: false, Reason: fmt.Sprintf("carries advisory %s", a.ID)}, false
 		}
 	}
-	return verdict{true, ""}, true
+	return verdict{Served: true}, true
 }
 
 func (g *gateway) advisoriesUnusable(eco string) string {
@@ -43,39 +44,40 @@ func (g *gateway) advisoriesUnusable(eco string) string {
 	return ""
 }
 
-func (g *gateway) check(up *Upstream, pkg, version string, published time.Time) verdict {
+func (g *gateway) check(up *Upstream, pkg, version string, published time.Time) (out verdict) {
+	defer func() { out.Published = published }()
 	if vd, ok := g.advisoryRefusal(up, pkg, version); !ok {
 		return vd
 	}
 	now := time.Now()
 	for _, e := range up.Exceptions {
 		if packageKey(up.Ecosystem, e.Package) == packageKey(up.Ecosystem, pkg) && sameVersion(up.Ecosystem, e.Version, version) && now.Before(e.Expires.Time) {
-			return verdict{true, fmt.Sprintf("hold exception reviewed in %s until %s: %s", e.Reviewed, e.Expires.Format(time.DateOnly), e.Reason)}
+			return verdict{Served: true, Reason: fmt.Sprintf("hold exception reviewed in %s until %s: %s", e.Reviewed, e.Expires.Format(time.DateOnly), e.Reason)}
 		}
 	}
 	if published.IsZero() {
-		return verdict{false, "the upstream gives no publication time"}
+		return verdict{Served: false, Reason: "the upstream gives no publication time"}
 	}
 	if now.Sub(published) >= up.Hold.Duration {
-		return verdict{true, ""}
+		return verdict{Served: true}
 	}
 	held := fmt.Sprintf("published %s, inside the %s release-age hold until %s",
 		published.UTC().Format(time.RFC3339), up.Hold.Duration, published.Add(up.Hold.Duration).UTC().Format(time.RFC3339))
 	adv, inUse, named := g.fixFor(up.Ecosystem, pkg, version)
 	if !named {
-		return verdict{false, held}
+		return verdict{Served: false, Reason: held}
 	}
 	age, _, loaded := g.inUse.age()
 	switch {
 	case !loaded:
-		return verdict{false, held + "; it is a fix release, and the in-use set has not loaded"}
+		return verdict{Served: false, Reason: held + "; it is a fix release, and the in-use set has not loaded"}
 	case age > g.cfg.InUse.MaxAge.Duration:
-		return verdict{false, fmt.Sprintf("%s; it is a fix release, and the in-use set is %s old, past the %s bound",
+		return verdict{Served: false, Reason: fmt.Sprintf("%s; it is a fix release, and the in-use set is %s old, past the %s bound",
 			held, age.Round(time.Second), g.cfg.InUse.MaxAge.Duration)}
 	case adv == "":
-		return verdict{false, held + "; it is a fix release for no version in use"}
+		return verdict{Served: false, Reason: held + "; it is a fix release for no version in use"}
 	}
-	return verdict{true, fmt.Sprintf("fix release: %s names it as the fix for %s@%s, which is in use", adv, pkg, inUse)}
+	return verdict{Served: true, Reason: fmt.Sprintf("fix release: %s names it as the fix for %s@%s, which is in use", adv, pkg, inUse)}
 }
 
 func (g *gateway) fixFor(eco, pkg, version string) (adv, inUse string, named bool) {

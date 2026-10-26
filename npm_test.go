@@ -78,6 +78,9 @@ func TestNPMTarballOfMaliciousVersionIsRefusedNamingTheAdvisory(t *testing.T) {
 	if rec.Served || rec.Package != "fsevents" || rec.Version != "1.2.4" || rec.Kind != "artifact" || rec.Reason != "listed as malicious by MAL-2023-462" || rec.Client == "" {
 		t.Errorf("record %+v", rec)
 	}
+	if p, err := time.Parse(time.RFC3339Nano, rec.Published); err != nil || time.Since(p).Round(time.Hour) != 2000*day {
+		t.Errorf("published %q, want the upstream's time for 1.2.4, 2000 days ago", rec.Published)
+	}
 
 	status, body = env.get("/npm/fsevents/-/fsevents-1.2.3.tgz")
 	if status != http.StatusOK || body != "tarball fsevents-1.2.3.tgz" {
@@ -149,6 +152,9 @@ func TestNPMRefusesWhatItCannotCheck(t *testing.T) {
 		t.Fatalf("no publication time: %d", status)
 	}
 	wantContains(t, body, "the upstream gives no publication time")
+	if rec := env.lastRecord(); rec.Published != "" {
+		t.Errorf("published %q for a version the upstream gives no time for", rec.Published)
+	}
 
 	status, body = env.get("/npm/left-pad/-/other-9.9.9.tgz")
 	if status != http.StatusForbidden {

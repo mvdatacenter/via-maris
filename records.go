@@ -21,6 +21,7 @@ type record struct {
 	Version   string `json:"version"`
 	Served    bool   `json:"served"`
 	Reason    string `json:"reason"`
+	Published string `json:"published,omitempty"`
 }
 
 type pendingRecord struct {

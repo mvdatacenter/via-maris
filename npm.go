@@ -157,7 +157,7 @@ func (g *gateway) npmPackument(w http.ResponseWriter, r *http.Request, up *Upstr
 			}
 		}
 	}
-	g.record(r, up, "metadata", name, "", verdict{true, fmt.Sprintf("%d of %d versions refused", len(refused), len(versions))})
+	g.record(r, up, "metadata", name, "", verdict{Served: true, Reason: fmt.Sprintf("%d of %d versions refused", len(refused), len(versions))})
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(doc)
 }
@@ -209,7 +209,7 @@ func (g *gateway) npmTarball(w http.ResponseWriter, r *http.Request, up *Upstrea
 		g.stream(w, r, tb)
 		return
 	}
-	vd := verdict{false, "no version of the package lists this tarball"}
+	vd := verdict{Served: false, Reason: "no version of the package lists this tarball"}
 	g.record(r, up, "artifact", name, file, vd)
 	refuse(w, refusal(name, file, vd), true)
 }

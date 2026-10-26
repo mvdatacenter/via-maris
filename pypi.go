@@ -76,7 +76,7 @@ func fileField(f map[string]any, k string) string {
 func (g *gateway) pypiFileVerdict(up *Upstream, project, filename, uploaded string) (string, verdict) {
 	p, v, ok := pypiFilename(filename)
 	if !ok || p != project {
-		return filename, verdict{false, "the filename carries no version of this project"}
+		return filename, verdict{Served: false, Reason: "the filename carries no version of this project"}
 	}
 	t, _ := time.Parse(time.RFC3339, uploaded)
 	return v, g.check(up, project, v, t)
@@ -118,7 +118,7 @@ func (g *gateway) pypiSimple(w http.ResponseWriter, r *http.Request, up *Upstrea
 		files = append(files, f)
 	}
 	doc["files"] = files
-	g.record(r, up, "metadata", project, "", verdict{true, fmt.Sprintf("%d of %d files refused", refused, len(listed))})
+	g.record(r, up, "metadata", project, "", verdict{Served: true, Reason: fmt.Sprintf("%d of %d files refused", refused, len(listed))})
 	if strings.Contains(r.Header.Get("Accept"), simpleJSON) {
 		w.Header().Set("Content-Type", simpleJSON)
 		json.NewEncoder(w).Encode(doc)
@@ -178,7 +178,7 @@ func (g *gateway) pypiFile(w http.ResponseWriter, r *http.Request, up *Upstream,
 				// Core metadata is text, never run. Serving it lets uv finish
 				// resolving an exact pin and print the yanked reason before
 				// the file itself is refused.
-				g.record(r, up, "metadata", project, v, verdict{true, "core metadata of a refused file: " + vd.Reason})
+				g.record(r, up, "metadata", project, v, verdict{Served: true, Reason: "core metadata of a refused file: " + vd.Reason, Published: vd.Published})
 				g.stream(w, r, up.Files+"/"+rel)
 				return
 			}
@@ -191,7 +191,7 @@ func (g *gateway) pypiFile(w http.ResponseWriter, r *http.Request, up *Upstream,
 			return
 		}
 	}
-	vd := verdict{false, "no project index lists this file"}
+	vd := verdict{Served: false, Reason: "no project index lists this file"}
 	g.record(r, up, "artifact", project, filename, vd)
 	refuseInStatus(w, r, refusal(project, filename, vd))
 }

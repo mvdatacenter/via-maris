@@ -284,7 +284,7 @@ func (g *gateway) gomod(w http.ResponseWriter, r *http.Request, up *Upstream, ix
 		return
 	}
 	if why := ix.notReady(); why != "" {
-		vd := verdict{false, why}
+		vd := verdict{Served: false, Reason: why}
 		g.record(r, up, "metadata", mod, "", vd)
 		http.Error(w, refusal(mod, "*", vd), http.StatusServiceUnavailable)
 		return
@@ -292,7 +292,7 @@ func (g *gateway) gomod(w http.ResponseWriter, r *http.Request, up *Upstream, ix
 	if why := g.advisoriesUnusable(up.Ecosystem); why != "" {
 		// Advisory data that is missing or stale refuses the listings too,
 		// rather than leaving them empty with no reason.
-		vd := verdict{false, why}
+		vd := verdict{Served: false, Reason: why}
 		g.record(r, up, "metadata", mod, "", vd)
 		http.Error(w, refusal(mod, "*", vd), http.StatusServiceUnavailable)
 		return
@@ -340,10 +340,10 @@ func (g *gateway) goCheck(ctx context.Context, up *Upstream, ix *goIndex, modEsc
 	t, err := g.goPublished(ctx, up, ix, modEsc, verEsc, mod, ver)
 	var missing *goMissing
 	if errors.As(err, &missing) {
-		return verdict{false, "the upstream has no such version"}, missing
+		return verdict{Served: false, Reason: "the upstream has no such version"}, missing
 	}
 	if err != nil {
-		return verdict{false, "the first-served time could not be read: " + err.Error()}, nil
+		return verdict{Served: false, Reason: "the first-served time could not be read: " + err.Error()}, nil
 	}
 	return g.check(up, mod, ver, t), nil
 }
@@ -381,7 +381,7 @@ func (g *gateway) goList(w http.ResponseWriter, r *http.Request, up *Upstream, i
 			kept = append(kept, v)
 		}
 	}
-	g.record(r, up, "metadata", mod, "", verdict{true, fmt.Sprintf("%d of %d versions refused", total-len(kept), total)})
+	g.record(r, up, "metadata", mod, "", verdict{Served: true, Reason: fmt.Sprintf("%d of %d versions refused", total-len(kept), total)})
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	for _, v := range kept {
 		fmt.Fprintln(w, v)
@@ -407,7 +407,7 @@ func (g *gateway) goLatest(w http.ResponseWriter, r *http.Request, up *Upstream,
 	}
 	var info struct{ Version string }
 	if err := json.Unmarshal(body, &info); err != nil || info.Version == "" {
-		vd := verdict{false, "the upstream's latest answer names no version"}
+		vd := verdict{Served: false, Reason: "the upstream's latest answer names no version"}
 		g.record(r, up, "metadata", mod, "", vd)
 		refuse(w, refusal(mod, "latest", vd), false)
 		return

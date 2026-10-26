@@ -50,11 +50,11 @@ func (g *gateway) pinned(w http.ResponseWriter, r *http.Request, up *Upstream) {
 	var vd verdict
 	switch got := hex.EncodeToString(sum.Sum(nil)); {
 	case n > maxPinnedBytes:
-		vd = verdict{false, fmt.Sprintf("the file is larger than %d bytes", maxPinnedBytes)}
+		vd = verdict{Served: false, Reason: fmt.Sprintf("the file is larger than %d bytes", maxPinnedBytes)}
 	case got != f.SHA256:
-		vd = verdict{false, fmt.Sprintf("its bytes hash to sha256:%s, not the pinned %s", got, digest)}
+		vd = verdict{Served: false, Reason: fmt.Sprintf("its bytes hash to sha256:%s, not the pinned %s", got, digest)}
 	default:
-		vd = verdict{true, ""}
+		vd = verdict{Served: true}
 	}
 	g.record(r, up, "artifact", name, digest, vd)
 	if !vd.Served {
