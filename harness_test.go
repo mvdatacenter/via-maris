@@ -4,10 +4,13 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -17,10 +20,15 @@ import (
 // fakeStore is an S3-compatible bucket in memory. It checks that every
 // request carries a signature for the expected key, and fails on demand.
 type fakeStore struct {
-	mu      sync.Mutex
-	objects map[string][]byte
-	fail    bool
+	mu               sync.Mutex
+	objects          map[string][]byte
+	fail             bool
+	beforePut        func(objects map[string][]byte, key string)
+	beforeList       func(objects map[string][]byte)
+	ignoreConditions bool
 }
+
+func etagOf(b []byte) string { return fmt.Sprintf("%q", fmt.Sprintf("%x", sha256.Sum256(b))) }
 
 func newFakeStore(t *testing.T) (*fakeStore, *httptest.Server) {
 	s := &fakeStore{objects: map[string][]byte{}}
@@ -38,18 +46,69 @@ func newFakeStore(t *testing.T) (*fakeStore, *httptest.Server) {
 		switch r.Method {
 		case http.MethodPut:
 			b, _ := io.ReadAll(r.Body)
+			if s.beforePut != nil {
+				s.beforePut(s.objects, r.URL.Path)
+			}
+			cur, exists := s.objects[r.URL.Path]
+			if !s.ignoreConditions && (r.Header.Get("If-Match") != "" && (!exists || r.Header.Get("If-Match") != etagOf(cur)) ||
+				r.Header.Get("If-None-Match") == "*" && exists) {
+				w.WriteHeader(http.StatusPreconditionFailed)
+				return
+			}
 			s.objects[r.URL.Path] = b
 		case http.MethodGet:
+			if r.URL.Query().Get("list-type") == "2" {
+				if s.beforeList != nil {
+					s.beforeList(s.objects)
+				}
+				s.list(w, r)
+				return
+			}
 			b, ok := s.objects[r.URL.Path]
 			if !ok {
 				http.NotFound(w, r)
 				return
 			}
+			w.Header().Set("ETag", etagOf(b))
 			w.Write(b)
 		}
 	}))
 	t.Cleanup(srv.Close)
 	return s, srv
+}
+
+// list answers ListObjectsV2 two keys a page, so callers must follow the
+// continuation token. The token is the last key of the page.
+func (s *fakeStore) list(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	bucket := strings.TrimSuffix(r.URL.Path, "/") + "/"
+	after := q.Get("start-after")
+	if tok := q.Get("continuation-token"); tok != "" {
+		after = tok
+	}
+	var keys []string
+	for k := range s.objects {
+		key, ok := strings.CutPrefix(k, bucket)
+		if ok && strings.HasPrefix(key, q.Get("prefix")) && key > after {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	page, truncated := keys, false
+	if len(keys) > 2 {
+		page, truncated = keys[:2], true
+	}
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>`)
+	for _, k := range page {
+		b.WriteString("<Contents><Key>" + k + "</Key></Contents>")
+	}
+	fmt.Fprintf(&b, "<IsTruncated>%t</IsTruncated>", truncated)
+	if truncated {
+		b.WriteString("<NextContinuationToken>" + page[len(page)-1] + "</NextContinuationToken>")
+	}
+	b.WriteString("</ListBucketResult>")
+	w.Write([]byte(b.String()))
 }
 
 func (s *fakeStore) setFail(fail bool) {
