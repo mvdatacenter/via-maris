@@ -427,6 +427,21 @@ func readInUse(ctx context.Context, store *objectStore, object string) (*inUseOb
 	return &o, etag, nil
 }
 
+func (r *recheckRun) unchangedSince(ctx context.Context, etag string) error {
+	body, now, err := r.inUse.getTagged(ctx, r.cfg.InUse.Object)
+	switch {
+	case errors.Is(err, errNoObject):
+	case err != nil:
+		return fmt.Errorf("re-reading %s before the write: %w", r.cfg.InUse.Object, err)
+	default:
+		body.Close()
+	}
+	if now != etag {
+		return errObjectChanged
+	}
+	return nil
+}
+
 type recheckSources struct {
 	fetchAll func(ctx context.Context, root string) (int, error)
 	scan     func(ctx context.Context, root, tmp string) ([]lockedPackage, error)
@@ -556,7 +571,11 @@ func (r *recheckRun) run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := r.inUse.putIf(ctx, r.cfg.InUse.Object, "application/json", body, condition, value); err != nil {
+	err = r.unchangedSince(ctx, etag)
+	if err == nil {
+		err = r.inUse.putIf(ctx, r.cfg.InUse.Object, "application/json", body, condition, value)
+	}
+	if err != nil {
 		if errors.Is(err, errObjectChanged) {
 			return fmt.Errorf("another pass wrote %s after this one read it, so this pass's set is dropped: %w", r.cfg.InUse.Object, err)
 		}

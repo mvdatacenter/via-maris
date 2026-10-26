@@ -363,18 +363,30 @@ func TestRecheckRebuildsServedVersionsWhenThePreviousSetIsLost(t *testing.T) {
 
 func TestAPassDropsItsSetWhenAnotherPassWroteFirst(t *testing.T) {
 	newer := []byte(`{"generated":"2026-10-26T12:00:00Z"}`)
-	for name, previous := range map[string][]byte{
-		"over the set it read": []byte(`{"generated":"2026-10-25T00:00:00Z"}`),
-		"where it read none":   nil,
+	write := func(objects map[string][]byte) { objects["/bucket/in-use.json"] = newer }
+	for _, c := range []struct {
+		name     string
+		previous []byte
+		ignores  bool
+	}{
+		{"over the set it read, on a store that checks the precondition", []byte(`{"generated":"2026-10-25T00:00:00Z"}`), false},
+		{"where it read none, on a store that checks the precondition", nil, false},
+		{"over the set it read, on a store that ignores the precondition", []byte(`{"generated":"2026-10-25T00:00:00Z"}`), true},
+		{"where it read none, on a store that ignores the precondition", nil, true},
 	} {
-		t.Run(name, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			env := newRecheckEnv(t)
-			if previous != nil {
-				env.store.put("/bucket/in-use.json", previous)
+			if c.previous != nil {
+				env.store.put("/bucket/in-use.json", c.previous)
 			}
-			env.store.beforePut = func(objects map[string][]byte, key string) {
-				if key == "/bucket/in-use.json" {
-					objects[key] = newer
+			env.store.ignoreConditions = c.ignores
+			if c.ignores {
+				env.store.beforeList = write
+			} else {
+				env.store.beforePut = func(objects map[string][]byte, key string) {
+					if key == "/bucket/in-use.json" {
+						write(objects)
+					}
 				}
 			}
 			err := env.run.run(context.Background())

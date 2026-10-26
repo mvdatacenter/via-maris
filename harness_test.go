@@ -20,10 +20,12 @@ import (
 // fakeStore is an S3-compatible bucket in memory. It checks that every
 // request carries a signature for the expected key, and fails on demand.
 type fakeStore struct {
-	mu        sync.Mutex
-	objects   map[string][]byte
-	fail      bool
-	beforePut func(objects map[string][]byte, key string)
+	mu               sync.Mutex
+	objects          map[string][]byte
+	fail             bool
+	beforePut        func(objects map[string][]byte, key string)
+	beforeList       func(objects map[string][]byte)
+	ignoreConditions bool
 }
 
 func etagOf(b []byte) string { return fmt.Sprintf("%q", fmt.Sprintf("%x", sha256.Sum256(b))) }
@@ -48,14 +50,17 @@ func newFakeStore(t *testing.T) (*fakeStore, *httptest.Server) {
 				s.beforePut(s.objects, r.URL.Path)
 			}
 			cur, exists := s.objects[r.URL.Path]
-			if m := r.Header.Get("If-Match"); m != "" && (!exists || m != etagOf(cur)) ||
-				r.Header.Get("If-None-Match") == "*" && exists {
+			if !s.ignoreConditions && (r.Header.Get("If-Match") != "" && (!exists || r.Header.Get("If-Match") != etagOf(cur)) ||
+				r.Header.Get("If-None-Match") == "*" && exists) {
 				w.WriteHeader(http.StatusPreconditionFailed)
 				return
 			}
 			s.objects[r.URL.Path] = b
 		case http.MethodGet:
 			if r.URL.Query().Get("list-type") == "2" {
+				if s.beforeList != nil {
+					s.beforeList(s.objects)
+				}
 				s.list(w, r)
 				return
 			}
