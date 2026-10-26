@@ -5,9 +5,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -19,11 +22,12 @@ import (
 type fakeStore struct {
 	mu      sync.Mutex
 	objects map[string][]byte
+	gets    map[string]int
 	fail    bool
 }
 
 func newFakeStore(t *testing.T) (*fakeStore, *httptest.Server) {
-	s := &fakeStore{objects: map[string][]byte{}}
+	s := &fakeStore{objects: map[string][]byte{}, gets: map[string]int{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.Header.Get("Authorization"), "AWS4-HMAC-SHA256 Credential=test-key/") {
 			http.Error(w, "unsigned", http.StatusForbidden)
@@ -40,6 +44,11 @@ func newFakeStore(t *testing.T) (*fakeStore, *httptest.Server) {
 			b, _ := io.ReadAll(r.Body)
 			s.objects[r.URL.Path] = b
 		case http.MethodGet:
+			if q := r.URL.Query(); q.Get("list-type") == "2" {
+				s.listPage(w, r.URL.Path+"/", q)
+				return
+			}
+			s.gets[r.URL.Path]++
 			b, ok := s.objects[r.URL.Path]
 			if !ok {
 				http.NotFound(w, r)
@@ -50,6 +59,43 @@ func newFakeStore(t *testing.T) (*fakeStore, *httptest.Server) {
 	}))
 	t.Cleanup(srv.Close)
 	return s, srv
+}
+
+// listPage answers ListObjectsV2 two keys at a time, so a listing of more
+// than two keys runs through its continuation tokens.
+func (s *fakeStore) listPage(w http.ResponseWriter, bucket string, q url.Values) {
+	var keys []string
+	for k := range s.objects {
+		key := strings.TrimPrefix(k, bucket)
+		after := q.Get("start-after")
+		if tok := q.Get("continuation-token"); tok != "" {
+			after = tok
+		}
+		if strings.HasPrefix(k, bucket) && strings.HasPrefix(key, q.Get("prefix")) && key > after {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	truncated := len(keys) > 2
+	if truncated {
+		keys = keys[:2]
+	}
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>`)
+	for _, k := range keys {
+		fmt.Fprintf(&b, "<Contents><Key>%s</Key></Contents>", k)
+	}
+	if truncated {
+		fmt.Fprintf(&b, "<IsTruncated>true</IsTruncated><NextContinuationToken>%s</NextContinuationToken>", keys[1])
+	}
+	b.WriteString("</ListBucketResult>")
+	w.Write([]byte(b.String()))
+}
+
+func (s *fakeStore) getCount(key string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.gets[key]
 }
 
 func (s *fakeStore) setFail(fail bool) {

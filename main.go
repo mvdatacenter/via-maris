@@ -205,26 +205,37 @@ func (g *gateway) start(ctx context.Context) {
 	}
 }
 
+func newClient() *http.Client {
+	return &http.Client{Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		ResponseHeaderTimeout: 60 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+		MaxIdleConnsPerHost:   32,
+	}}
+}
+
+func signalContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+}
+
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "recheck" {
+		recheckMain(os.Args[2])
+		return
+	}
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: via-maris <config.json>")
+		fmt.Fprintln(os.Stderr, "usage: via-maris <config.json>\n       via-maris recheck <recheck.json>")
 		os.Exit(2)
 	}
 	cfg, err := loadConfig(os.Args[1])
 	if err != nil {
 		log.Fatal(err)
 	}
-	client := &http.Client{Transport: &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		ResponseHeaderTimeout: 60 * time.Second,
-		IdleConnTimeout:       90 * time.Second,
-		MaxIdleConnsPerHost:   32,
-	}}
-	g, err := newGateway(cfg, client, os.Stdout)
+	g, err := newGateway(cfg, newClient(), os.Stdout)
 	if err != nil {
 		log.Fatal(err)
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+	ctx, stop := signalContext()
 	defer stop()
 	g.start(ctx)
 	// The records loop outlives the server, so the decisions of requests

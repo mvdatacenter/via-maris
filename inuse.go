@@ -9,8 +9,10 @@ import (
 )
 
 type inUseFile struct {
-	Generated  time.Time                      `json:"generated"`
-	Ecosystems map[string]map[string][]string `json:"ecosystems"`
+	Generated      time.Time                                  `json:"generated"`
+	Ecosystems     map[string]map[string][]string             `json:"ecosystems"`
+	RecordsThrough time.Time                                  `json:"recordsThrough,omitzero"`
+	Served         map[string]map[string]map[string]time.Time `json:"served,omitempty"`
 }
 
 type inUseSet struct {

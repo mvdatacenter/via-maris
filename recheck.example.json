@@ -1,0 +1,38 @@
+{
+  "github": {
+    "api": "https://api.github.com",
+    "org": "example-org",
+    "appIdEnv": "GITHUB_APP_ID",
+    "installationIdEnv": "GITHUB_APP_INSTALLATION_ID",
+    "privateKeyEnv": "GITHUB_APP_PRIVATE_KEY"
+  },
+  "scanner": {
+    "path": "/osv-scanner",
+    "workDir": "/var/cache/via-maris-recheck"
+  },
+  "alertmanager": {
+    "url": "http://alertmanager.example:9093",
+    "resolveAfter": "45m"
+  },
+  "inUse": {
+    "store": {
+      "endpoint": "https://in-use-store.example.com",
+      "region": "us-east-1",
+      "bucket": "via-maris-in-use",
+      "accessKeyIdEnv": "IN_USE_ACCESS_KEY_ID",
+      "secretAccessKeyEnv": "IN_USE_SECRET_ACCESS_KEY"
+    },
+    "object": "in-use.json"
+  },
+  "records": {
+    "store": {
+      "endpointEnv": "RECORDS_ENDPOINT",
+      "region": "auto",
+      "bucket": "via-maris-records",
+      "accessKeyIdEnv": "RECORDS_ACCESS_KEY_ID",
+      "secretAccessKeyEnv": "RECORDS_SECRET_ACCESS_KEY"
+    },
+    "prefix": "records/",
+    "window": "720h"
+  }
+}

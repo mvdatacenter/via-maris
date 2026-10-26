@@ -6,6 +6,8 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -49,9 +51,72 @@ func (s *objectStore) get(ctx context.Context, key string) (io.ReadCloser, error
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		resp.Body.Close()
-		return nil, fmt.Errorf("GET %s/%s: %s %s", s.bucket, key, resp.Status, strings.TrimSpace(string(body)))
+		return nil, &storeError{resp.StatusCode, fmt.Sprintf("GET %s/%s: %s %s", s.bucket, key, resp.Status, strings.TrimSpace(string(body)))}
 	}
 	return resp.Body, nil
+}
+
+var errNoObject = errors.New("no such object")
+
+type storeError struct {
+	status int
+	text   string
+}
+
+func (e *storeError) Error() string { return e.text }
+
+func (e *storeError) Is(target error) bool {
+	return target == errNoObject && e.status == http.StatusNotFound
+}
+
+func (s *objectStore) list(ctx context.Context, prefix, startAfter string) ([]string, error) {
+	var keys []string
+	token := ""
+	for {
+		// The signed query must be in canonical form: sorted, and escaped
+		// as SigV4 escapes it.
+		q := "list-type=2&prefix=" + s3QueryEscape(prefix) + "&start-after=" + s3QueryEscape(startAfter)
+		if token != "" {
+			q = "continuation-token=" + s3QueryEscape(token) + "&" + q
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.endpoint+"/"+s3Escape(s.bucket)+"?"+q, nil)
+		if err != nil {
+			return nil, err
+		}
+		s.sign(req, emptySHA256, time.Now())
+		resp, err := s.client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("LIST %s/%s: %s %s", s.bucket, prefix, resp.Status, strings.TrimSpace(string(body[:min(len(body), 512)])))
+		}
+		var page struct {
+			Contents []struct {
+				Key string
+			}
+			IsTruncated           bool
+			NextContinuationToken string
+		}
+		if err := xml.Unmarshal(body, &page); err != nil {
+			return nil, fmt.Errorf("LIST %s/%s: %w", s.bucket, prefix, err)
+		}
+		for _, c := range page.Contents {
+			keys = append(keys, c.Key)
+		}
+		if !page.IsTruncated {
+			return keys, nil
+		}
+		if page.NextContinuationToken == "" {
+			return nil, fmt.Errorf("LIST %s/%s: a truncated page carried no continuation token", s.bucket, prefix)
+		}
+		token = page.NextContinuationToken
+	}
 }
 
 func (s *objectStore) put(ctx context.Context, key, contentType string, body []byte) error {
@@ -129,6 +194,12 @@ func hmacSHA256(key []byte, data string) []byte {
 func sha256Hex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+// s3QueryEscape escapes a query value as SigV4's canonical query does, which
+// leaves only unreserved characters bare.
+func s3QueryEscape(v string) string {
+	return strings.ReplaceAll(s3Escape(v), "/", "%2F")
 }
 
 func s3Escape(key string) string {

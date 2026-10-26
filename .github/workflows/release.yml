@@ -41,25 +41,41 @@ jobs:
           tags: ${{ env.IMAGE }}:${{ github.ref_name }}
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
 
+      # The re-check's image, the same program with OSV-Scanner beside it, is
+      # tagged in the same package so it shares the package's visibility.
+      - id: build-recheck
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: recheck
+          push: true
+          build-args: VERSION=${{ github.ref_name }}
+          tags: ${{ env.IMAGE }}:${{ github.ref_name }}-recheck
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Sign
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGESTS: ${{ steps.build.outputs.digest }} ${{ steps.build-recheck.outputs.digest }}
         run: |
-          cosign sign --yes "$IMAGE@$DIGEST"
-          echo "Published $IMAGE@$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          for digest in $DIGESTS; do
+            cosign sign --yes "$IMAGE@$digest"
+            echo "Published $IMAGE@$digest" >> "$GITHUB_STEP_SUMMARY"
+          done
 
       # The image is pulled without credentials, so a private package would
       # publish here and still fail every pull.
       - name: Check the image pulls anonymously
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGESTS: ${{ steps.build.outputs.digest }} ${{ steps.build-recheck.outputs.digest }}
         run: |
-          if ! token=$(curl -fsS "https://ghcr.io/token?scope=repository:mvdatacenter/via-maris:pull" | jq -r .token) ||
-             ! curl -fsS -o /dev/null -H "Authorization: Bearer $token" \
-               -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json" \
-               "https://ghcr.io/v2/mvdatacenter/via-maris/manifests/$DIGEST"; then
-            echo "::error::$IMAGE@$DIGEST is not publicly pullable; set the package's visibility to public"
-            exit 1
-          fi
+          for digest in $DIGESTS; do
+            if ! token=$(curl -fsS "https://ghcr.io/token?scope=repository:mvdatacenter/via-maris:pull" | jq -r .token) ||
+               ! curl -fsS -o /dev/null -H "Authorization: Bearer $token" \
+                 -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json" \
+                 "https://ghcr.io/v2/mvdatacenter/via-maris/manifests/$digest"; then
+              echo "::error::$IMAGE@$digest is not publicly pullable; set the package's visibility to public"
+              exit 1
+            fi
+          done
