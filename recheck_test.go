@@ -400,6 +400,40 @@ func TestAPassDropsItsSetWhenAnotherPassWroteFirst(t *testing.T) {
 	}
 }
 
+func TestTheNextPassRecoversWhatAnOverwrittenSetHeld(t *testing.T) {
+	env := newRecheckEnv(t)
+	env.store.ignoreConditions = true
+	now := time.Now().UTC()
+	first := now.Add(-30 * time.Minute)
+	env.store.put(recordsKey(first), recordsObject(record{Time: first.Format(time.RFC3339Nano), Ecosystem: "npm", Kind: "artifact", Package: "first", Version: "1.0.0", Served: true}))
+	later := now.Add(-time.Minute)
+	newer, _ := json.Marshal(inUseObject{
+		Generated:      later,
+		RecordsThrough: later,
+		Served:         map[string]map[string]map[string]time.Time{"npm": {"first": {"1.0.0": first}, "later": {"2.0.0": later}}},
+	})
+	env.store.beforePut = func(objects map[string][]byte, key string) {
+		if key == "/bucket/in-use.json" {
+			env.store.beforePut = nil
+			objects[recordsKey(later)] = recordsObject(record{Time: later.Format(time.RFC3339Nano), Ecosystem: "npm", Kind: "artifact", Package: "later", Version: "2.0.0", Served: true})
+			objects[key] = newer
+		}
+	}
+	if err := env.run.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if o := env.inUse(); !o.RecordsThrough.Equal(first) || o.Ecosystems["npm"]["later"] != nil {
+		t.Fatalf("the set written between the re-read and the write survived: through %s, npm %v", o.RecordsThrough, o.Ecosystems["npm"])
+	}
+	if err := env.run.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	o := env.inUse()
+	if !o.RecordsThrough.Equal(later) || o.Ecosystems["npm"]["first"] == nil || o.Ecosystems["npm"]["later"] == nil {
+		t.Errorf("after the next pass: through %s, npm %v, want both versions through %s", o.RecordsThrough, o.Ecosystems["npm"], later)
+	}
+}
+
 func TestAnUnreachableStoreFailsTheRunRatherThanRebuilding(t *testing.T) {
 	env := newRecheckEnv(t)
 	env.store.put("/bucket/in-use.json", []byte(`{"generated":"2026-10-25T00:00:00Z"}`))
