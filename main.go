@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -25,6 +26,7 @@ type gateway struct {
 	records    *recorder
 	goIdx      map[string]*goIndex
 	ecosystems []string
+	byName     *byName
 }
 
 func newGateway(cfg *Config, client *http.Client, recordLog io.Writer) (*gateway, error) {
@@ -57,6 +59,9 @@ func newGateway(cfg *Config, client *http.Client, recordLog io.Writer) (*gateway
 		}
 	}
 	sort.Strings(g.ecosystems)
+	if cfg.ByName != nil {
+		g.byName = newByName(g, cfg.ByName)
+	}
 	return g, nil
 }
 
@@ -82,7 +87,16 @@ func (g *gateway) handler() http.Handler {
 	}
 	mux.HandleFunc("/healthz", g.healthz)
 	mux.HandleFunc("/metrics", g.metrics)
-	return mux
+	if g.byName == nil {
+		return mux
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodConnect {
+			g.byName.connect(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 // gated admits only reads, plus the POST of npm's audit, and refuses every
@@ -125,6 +139,11 @@ func (g *gateway) notReady() []string {
 	if g.recordsBehind() != "" {
 		out = append(out, "records")
 	}
+	if g.byName != nil {
+		if _, err := g.byName.certs.current(); err != nil {
+			out = append(out, "tls certificate")
+		}
+	}
 	sort.Strings(out)
 	return out
 }
@@ -162,6 +181,18 @@ func (g *gateway) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "via_maris_records_unshipped_seconds %d\n", int(g.records.unshipped().Seconds()))
 	fmt.Fprintf(w, "via_maris_decisions_total{served=\"true\"} %d\n", g.records.served.Load())
 	fmt.Fprintf(w, "via_maris_decisions_total{served=\"false\"} %d\n", g.records.refused.Load())
+	if g.byName != nil {
+		leaf, ca := g.byName.certs.expiry()
+		fmt.Fprintf(w, "via_maris_tls_expiry_timestamp_seconds{certificate=\"leaf\"} %d\n", unixOrZero(leaf))
+		fmt.Fprintf(w, "via_maris_tls_expiry_timestamp_seconds{certificate=\"ca\"} %d\n", unixOrZero(ca))
+	}
+}
+
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
 }
 
 func every(ctx context.Context, interval time.Duration, f func(context.Context)) {
@@ -242,9 +273,20 @@ func main() {
 		close(recordsDone)
 	}()
 	srv := &http.Server{Addr: cfg.Listen, Handler: g.handler(), ReadHeaderTimeout: 30 * time.Second}
-	served := make(chan error, 1)
+	served := make(chan error, 2)
 	go func() { served <- srv.ListenAndServe() }()
 	log.Printf("via-maris %s listening on %s", version, cfg.Listen)
+	if g.byName != nil {
+		if _, err := g.byName.certs.current(); err != nil {
+			log.Printf("tls certificate: %v; the by-name listener refuses handshakes until it loads", err)
+		}
+		ln, err := net.Listen("tcp", cfg.ByName.Listen)
+		if err != nil {
+			log.Fatal(err)
+		}
+		go func() { served <- g.byName.serveTLS(ln) }()
+		log.Printf("serving %s and %s by name on %s", g.byName.indexHost, g.byName.filesHost, cfg.ByName.Listen)
+	}
 	select {
 	case err := <-served:
 		log.Fatal(err)
@@ -254,6 +296,11 @@ func main() {
 	defer cancel()
 	if err := srv.Shutdown(shutdown); err != nil {
 		log.Printf("shutdown: %v", err)
+	}
+	if g.byName != nil {
+		if err := g.byName.srv.Shutdown(shutdown); err != nil {
+			log.Printf("shutdown: %v", err)
+		}
 	}
 	stopRecords()
 	<-recordsDone

@@ -84,6 +84,14 @@ type Store struct {
 	SecretAccessKeyEnv string `json:"secretAccessKeyEnv"`
 }
 
+type ByName struct {
+	Listen   string `json:"listen"`
+	Upstream string `json:"upstream"`
+	Cert     string `json:"cert"`
+	Key      string `json:"key"`
+	CA       string `json:"ca"`
+}
+
 type Config struct {
 	Listen     string `json:"listen"`
 	Advisories struct {
@@ -104,6 +112,7 @@ type Config struct {
 		MaxUnshipped Duration `json:"maxUnshipped"`
 	} `json:"records"`
 	Upstreams []Upstream `json:"upstreams"`
+	ByName    *ByName    `json:"byName"`
 }
 
 var (
@@ -185,7 +194,34 @@ func (c *Config) validate() error {
 			return err
 		}
 	}
+	if c.ByName != nil {
+		return c.ByName.validate(c)
+	}
 	return nil
+}
+
+func (b *ByName) validate(c *Config) error {
+	if b.Listen == "" || b.Listen == c.Listen {
+		return errors.New("byName.listen is required and differs from listen")
+	}
+	if b.Cert == "" || b.Key == "" || b.CA == "" {
+		return errors.New("byName needs cert, key and ca files")
+	}
+	for _, u := range c.Upstreams {
+		if u.Name != b.Upstream {
+			continue
+		}
+		if u.Ecosystem != "PyPI" {
+			return fmt.Errorf("byName.upstream %s is not a PyPI upstream", b.Upstream)
+		}
+		index, _ := url.Parse(u.URL)
+		files, _ := url.Parse(u.Files)
+		if index.Hostname() == files.Hostname() {
+			return fmt.Errorf("byName.upstream %s serves its index and files from one host, so its requests cannot be told apart by name", b.Upstream)
+		}
+		return nil
+	}
+	return fmt.Errorf("byName.upstream %q names no upstream", b.Upstream)
 }
 
 func (u *Upstream) validate(seen map[string]bool) error {

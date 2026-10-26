@@ -27,6 +27,9 @@ func TestExampleConfigLoads(t *testing.T) {
 	if got := newObjectStore(cfg.Records.Store, nil).objectURL("k"); got != "https://account.records.example/via-maris-records/k" {
 		t.Errorf("records object URL %s, want the endpoint RECORDS_ENDPOINT holds", got)
 	}
+	if cfg.ByName == nil || cfg.ByName.Upstream != "pypi" {
+		t.Errorf("byName %+v", cfg.ByName)
+	}
 }
 
 func writeVariant(t *testing.T, edit func(c map[string]any)) string {
@@ -92,6 +95,11 @@ func TestConfigRefusals(t *testing.T) {
 			upstreamAt(c, 4)["pinned"].([]any)[0].(map[string]any)["sha256"] = "ABC"
 		}, "needs a lower-case hex sha256"},
 		{"no upstreams", func(c map[string]any) { c["upstreams"] = []any{} }, "upstreams is empty"},
+		{"by name on npm", func(c map[string]any) { c["byName"].(map[string]any)["upstream"] = "npm" }, "byName.upstream npm is not a PyPI upstream"},
+		{"by name on no upstream", func(c map[string]any) { c["byName"].(map[string]any)["upstream"] = "pip" }, `byName.upstream "pip" names no upstream`},
+		{"by name on the main listener", func(c map[string]any) { c["byName"].(map[string]any)["listen"] = ":8480" }, "byName.listen is required and differs from listen"},
+		{"by name without a CA", func(c map[string]any) { delete(c["byName"].(map[string]any), "ca") }, "byName needs cert, key and ca files"},
+		{"by name with files on the index host", func(c map[string]any) { upstreamAt(c, 1)["files"] = "https://pypi.org/files" }, "serves its index and files from one host"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := loadConfig(writeVariant(t, c.edit))

@@ -17,6 +17,7 @@ type fakePyPI struct {
 	project      string
 	uploads      map[string]time.Duration // filename -> age
 	offHost      string                   // a filename listed on another host
+	filesBase    string
 }
 
 func newFakePyPI(t *testing.T, project string, uploads map[string]time.Duration) *fakePyPI {
@@ -25,6 +26,14 @@ func newFakePyPI(t *testing.T, project string, uploads map[string]time.Duration)
 		w.Write([]byte("file " + strings.TrimPrefix(r.URL.Path, "/")))
 	}))
 	f.index = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		base := f.files.URL
+		if f.filesBase != "" {
+			base = f.filesBase
+		}
+		if r.URL.Path == "/pypi/"+f.project+"/json" {
+			f.serveJSON(w, base)
+			return
+		}
 		if r.URL.Path != "/simple/"+f.project+"/" {
 			http.NotFound(w, r)
 			return
@@ -33,7 +42,7 @@ func newFakePyPI(t *testing.T, project string, uploads map[string]time.Duration)
 		for name, age := range f.uploads {
 			files = append(files, map[string]any{
 				"filename":      name,
-				"url":           f.files.URL + "/packages/ab/" + name,
+				"url":           base + "/packages/ab/" + name,
 				"hashes":        map[string]string{"sha256": "00"},
 				"upload-time":   ago(age),
 				"core-metadata": map[string]string{"sha256": "11"},
@@ -48,6 +57,22 @@ func newFakePyPI(t *testing.T, project string, uploads map[string]time.Duration)
 	t.Cleanup(f.index.Close)
 	t.Cleanup(f.files.Close)
 	return f
+}
+
+func (f *fakePyPI) serveJSON(w http.ResponseWriter, base string) {
+	releases := map[string][]map[string]any{}
+	for name, age := range f.uploads {
+		_, v, _ := pypiFilename(name)
+		releases[v] = append(releases[v], map[string]any{
+			"filename":             name,
+			"url":                  base + "/packages/ab/" + name,
+			"upload_time_iso_8601": ago(age),
+			"yanked":               false,
+			"yanked_reason":        nil,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"info": map[string]string{"name": f.project}, "releases": releases, "urls": []any{}})
 }
 
 func pypiUpstream(f *fakePyPI) Upstream {

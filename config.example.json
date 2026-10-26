@@ -82,5 +82,12 @@
         }
       ]
     }
-  ]
+  ],
+  "byName": {
+    "listen": ":8443",
+    "upstream": "pypi",
+    "cert": "/etc/via-maris/tls/tls.crt",
+    "key": "/etc/via-maris/tls/tls.key",
+    "ca": "/etc/via-maris/tls/ca.crt"
+  }
 }
