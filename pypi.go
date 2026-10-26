@@ -22,7 +22,7 @@ func (g *gateway) pypi(w http.ResponseWriter, r *http.Request, up *Upstream) {
 			http.NotFound(w, r)
 			return
 		}
-		g.pypiSimple(w, r, up, normalizePyPI(project))
+		g.pypiSimple(w, r, up, normalizePyPI(project), func(rel string) string { return baseURL(r) + "/" + up.Name + "/files/" + rel })
 	case strings.HasPrefix(rest, "files/"):
 		g.pypiFile(w, r, up, strings.TrimPrefix(rest, "files/"))
 	default:
@@ -73,22 +73,21 @@ func fileField(f map[string]any, k string) string {
 	return s
 }
 
-func (g *gateway) pypiFileVerdict(up *Upstream, project string, f map[string]any) (string, verdict) {
-	filename := fileField(f, "filename")
+func (g *gateway) pypiFileVerdict(up *Upstream, project, filename, uploaded string) (string, verdict) {
 	p, v, ok := pypiFilename(filename)
 	if !ok || p != project {
 		return filename, verdict{false, "the filename carries no version of this project"}
 	}
-	t, _ := time.Parse(time.RFC3339, fileField(f, "upload-time"))
+	t, _ := time.Parse(time.RFC3339, uploaded)
 	return v, g.check(up, project, v, t)
 }
 
 // pypiSimple serves a project page whose refused files are yanked with their
 // reason, so a range skips them and an exact pin names why, and whose file
-// URLs all point back through the gateway. A file the upstream lists on a
-// host other than its configured files host is left out, because the
-// gateway cannot serve it.
-func (g *gateway) pypiSimple(w http.ResponseWriter, r *http.Request, up *Upstream, project string) {
+// URLs are the ones fileURL gives for each path under the files host. A file
+// the upstream lists on a host other than its configured files host is left
+// out, because the gateway cannot serve it.
+func (g *gateway) pypiSimple(w http.ResponseWriter, r *http.Request, up *Upstream, project string, fileURL func(rel string) string) {
 	doc, status, err := g.simplePage(r.Context(), up, project)
 	if err != nil {
 		upstreamError(w, err)
@@ -110,8 +109,8 @@ func (g *gateway) pypiSimple(w http.ResponseWriter, r *http.Request, up *Upstrea
 		if !ok {
 			continue
 		}
-		f["url"] = baseURL(r) + "/" + up.Name + "/files/" + rel
-		v, vd := g.pypiFileVerdict(up, project, f)
+		f["url"] = fileURL(rel)
+		v, vd := g.pypiFileVerdict(up, project, fileField(f, "filename"), fileField(f, "upload-time"))
 		if !vd.Served {
 			f["yanked"] = refusal(project, v, vd)
 			refused++
@@ -174,7 +173,7 @@ func (g *gateway) pypiFile(w http.ResponseWriter, r *http.Request, up *Upstream,
 			if f == nil || fileField(f, "url") != up.Files+"/"+listed {
 				continue
 			}
-			v, vd := g.pypiFileVerdict(up, project, f)
+			v, vd := g.pypiFileVerdict(up, project, fileField(f, "filename"), fileField(f, "upload-time"))
 			if rel != listed && !vd.Served {
 				// Core metadata is text, never run. Serving it lets uv finish
 				// resolving an exact pin and print the yanked reason before

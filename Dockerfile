@@ -16,6 +16,6 @@ COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certifica
 COPY --from=build /via-maris /via-maris
 COPY --from=osv-scanner /out/osv-scanner /osv-scanner
 USER 65532:65532
-EXPOSE 8480
+EXPOSE 8480 8443
 ENTRYPOINT ["/via-maris"]
 CMD ["/etc/via-maris/config.json"]

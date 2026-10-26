@@ -24,6 +24,7 @@ cosign verify ghcr.io/mvdatacenter/via-maris:<tag> \
 - `inUse`: an object in an S3-compatible store that lists the versions already in use, shaped `{"generated": "<RFC 3339>", "ecosystems": {"npm": {"<package>": ["<version>"]}}}`. The re-check writes it. A version inside the hold is served when it fixes an advisory against a version in that list. `maxAge` bounds how stale the object may be.
 - `records`: where decision records are uploaded, as NDJSON batches under `prefix`. A record is written to stdout for every decision. Once the oldest unshipped record is older than `maxUnshipped`, every request is answered 503.
 - `upstreams`: one entry per registry fronted, served under `/<name>/`.
+- `byName` (optional): serves one PyPI upstream under the host names of its `url` and `files`, as [PyPI by its own names](#pypi-by-its-own-names) describes. `listen` is the TLS listener's address, `upstream` names the PyPI upstream, and `cert`, `key` and `ca` are the files holding the leaf certificate, its key and the CA certificate that signed it.
 
 The access keys for both stores are read from the environment variables the store names. A store's endpoint is given either as `endpoint` or, when it carries a value kept out of the configuration such as an account id, as `endpointEnv`, the environment variable that holds it.
 
@@ -45,6 +46,26 @@ With the gateway at `http://via-maris:8480` and the upstream names from the exam
 | apt | `deb http://via-maris:8480/apt/ubuntu <suite> main` |
 | files | `http://via-maris:8480/files/<pinned name>` |
 
+## PyPI by its own names
+
+A uv lockfile records the index it was resolved at and each file's URL, so a lock resolved at `pypi.org` names `pypi.org` and `files.pythonhosted.org` whatever index the machine installing it is set to. `byName` lets those installs reach the check with the lock unchanged. The gateway answers TLS for the two host names of the upstream's `url` and `files` and serves them as the upstream does:
+
+- `/simple/<project>/` on the index host is the simple index, with refused files yanked with their reason and every file URL left on the files host.
+- `/pypi/<project>/json` and `/pypi/<project>/<version>/json` on the index host are the JSON API, with each refused file's `yanked` set and its `yanked_reason` naming why.
+- Every path on the files host is checked as the `/<name>/files/` path is: the package and version are read from the wheel or sdist file name and the file is served only when the project's index lists it.
+
+A client reaches it in either of two ways:
+
+- **By resolving the names to the gateway.** A host entry, or a pod's `hostAliases`, maps both names to the address that serves `byName.listen` on port 443.
+- **Through `CONNECT`.** With the main listener as its HTTPS proxy, a client asks for `CONNECT pypi.org:443` or `CONNECT files.pythonhosted.org:443`, and the tunnel is answered by the same TLS server. A `CONNECT` to any other host or port is refused with 403 and recorded.
+
+| Client | Setting |
+| --- | --- |
+| uv | `HTTPS_PROXY=http://via-maris:8480`, `SSL_CERT_FILE=<bundle with the CA>` and `UV_SYSTEM_CERTS=1` |
+| pip | `proxy = http://via-maris:8480` and `cert = <bundle with the CA>` in `pip.conf`, with no index |
+
+Every client that installs through `byName` trusts the CA in `ca`, so that CA should carry name constraints permitting the two host names alone. The gateway reads the leaf, key and CA from files and checks them on each handshake, so a certificate manager that replaces them on renewal needs no restart. A pair that fails to load leaves the previous one in use. Until a pair has loaded, `/healthz` reports the TLS certificate as not ready and the listener refuses handshakes. The listener speaks HTTP/1.1 alone, so a refusal reaches pip in the status line.
+
 The checks differ by front end:
 
 - **npm, PyPI and Go** are checked one version at a time.
@@ -53,8 +74,8 @@ The checks differ by front end:
 
 ## Operating
 
-- `GET /healthz` answers 503 and names what is not ready: an ecosystem's advisory data, a Go index, or the record upload. A stale in-use set only stops fix releases from passing the hold, so the gateway stays ready.
-- `GET /metrics` serves Prometheus text.
+- `GET /healthz` answers 503 and names what is not ready: an ecosystem's advisory data, a Go index, the record upload, or with `byName` the TLS certificate. A stale in-use set only stops fix releases from passing the hold, so the gateway stays ready.
+- `GET /metrics` serves Prometheus text. With `byName`, `via_maris_tls_expiry_timestamp_seconds` gives the leaf's and the CA's expiry as Unix time, labelled `certificate="leaf"` and `certificate="ca"`, and 0 before a pair has loaded.
 
 A refused version is answered 403, with the refusal reason in the response.
 
