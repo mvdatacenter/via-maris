@@ -8,10 +8,9 @@ docker build -t via-maris .
 docker run -p 8480:8480 -v "$PWD/config.json:/etc/via-maris/config.json:ro" via-maris
 ```
 
-Each `v*` tag publishes `ghcr.io/mvdatacenter/via-maris:<tag>`, built with the tag as the version that `/healthz` and `/metrics` report and signed by this repository's release workflow with cosign keyless signing. The package is private, so pulling the image or checking its signature needs a login with a GitHub token that has the `read:packages` scope. This logs in and checks the signature:
+Each `v*` tag publishes `ghcr.io/mvdatacenter/via-maris:<tag>`, built with the tag as the version that `/healthz` and `/metrics` report and signed by this repository's release workflow with cosign keyless signing. This checks the signature:
 
 ```
-echo "$TOKEN" | docker login ghcr.io -u <github-user> --password-stdin
 cosign verify ghcr.io/mvdatacenter/via-maris:<tag> \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity-regexp '^https://github.com/mvdatacenter/via-maris/\.github/workflows/release\.yml@refs/tags/v'
