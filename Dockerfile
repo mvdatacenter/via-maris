@@ -1,5 +1,5 @@
-# The gateway is built from the Go standard library alone, so this build
-# downloads no module.
+# The gateway stages use the Go standard library alone and download no module;
+# the recheck target installs OSV-Scanner at a pinned release.
 FROM golang:1.27.3@sha256:f20d83a83e18dbd2a4714b8ffd4b30b287b6243962dd75608e86abcc63ba4efc AS build
 WORKDIR /src
 COPY go.mod *.go ./
