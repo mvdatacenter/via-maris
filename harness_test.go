@@ -5,9 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -40,6 +42,10 @@ func newFakeStore(t *testing.T) (*fakeStore, *httptest.Server) {
 			b, _ := io.ReadAll(r.Body)
 			s.objects[r.URL.Path] = b
 		case http.MethodGet:
+			if r.URL.Query().Get("list-type") == "2" {
+				s.list(w, r)
+				return
+			}
 			b, ok := s.objects[r.URL.Path]
 			if !ok {
 				http.NotFound(w, r)
@@ -50,6 +56,40 @@ func newFakeStore(t *testing.T) (*fakeStore, *httptest.Server) {
 	}))
 	t.Cleanup(srv.Close)
 	return s, srv
+}
+
+// list answers ListObjectsV2 two keys a page, so callers must follow the
+// continuation token. The token is the last key of the page.
+func (s *fakeStore) list(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	bucket := strings.TrimSuffix(r.URL.Path, "/") + "/"
+	after := q.Get("start-after")
+	if tok := q.Get("continuation-token"); tok != "" {
+		after = tok
+	}
+	var keys []string
+	for k := range s.objects {
+		key, ok := strings.CutPrefix(k, bucket)
+		if ok && strings.HasPrefix(key, q.Get("prefix")) && key > after {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	page, truncated := keys, false
+	if len(keys) > 2 {
+		page, truncated = keys[:2], true
+	}
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>`)
+	for _, k := range page {
+		b.WriteString("<Contents><Key>" + k + "</Key></Contents>")
+	}
+	fmt.Fprintf(&b, "<IsTruncated>%t</IsTruncated>", truncated)
+	if truncated {
+		b.WriteString("<NextContinuationToken>" + page[len(page)-1] + "</NextContinuationToken>")
+	}
+	b.WriteString("</ListBucketResult>")
+	w.Write([]byte(b.String()))
 }
 
 func (s *fakeStore) setFail(fail bool) {

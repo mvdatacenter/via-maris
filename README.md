@@ -4,6 +4,8 @@
 
 A version listed as malicious in published advisory data is refused, and so is a version younger than a configured release-age hold unless the configuration carries an exception for it. The refusal names the package, the version, and the advisory or age that refused it. When the gateway cannot run a check, the install is refused.
 
+`via-maris recheck` runs the same check over what is already in use. It reads every lockfile in an organization's repositories, raises an alert for each locked version that advisory data now lists as malicious, and writes the set of versions in use that a fix release is admitted through the hold for.
+
 The gateway keeps nothing that cannot be fetched again from upstream. Its behaviour comes entirely from configuration: the list of upstream registries it fronts and the policy applied to each.
 
 The name comes from the Via Maris, the Way of the Sea, the ancient road from Egypt through Galilee to Damascus.
