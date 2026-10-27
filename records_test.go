@@ -37,7 +37,7 @@ func TestRecordsAreShippedAndAFailedUploadKeepsThem(t *testing.T) {
 	env.store.mu.Lock()
 	body := string(env.store.objects[keys[0]])
 	env.store.mu.Unlock()
-	wantContains(t, body, `"package":"left-pad"`, `"version":"1.3.0"`, `"served":true`)
+	wantContains(t, body, `"package":"left-pad"`, `"version":"1.3.0"`, `"served":true`, `"published":"`)
 }
 
 func TestRequestsAreRefusedWhileRecordsCannotReachStorage(t *testing.T) {

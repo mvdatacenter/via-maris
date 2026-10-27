@@ -119,7 +119,7 @@ func (b *byName) index(w http.ResponseWriter, r *http.Request) {
 func (b *byName) connect(w http.ResponseWriter, r *http.Request) {
 	host, port, err := net.SplitHostPort(r.Host)
 	if err != nil || port != "443" || host != b.indexHost && host != b.filesHost {
-		vd := verdict{false, fmt.Sprintf("CONNECT reaches %s:443 and %s:443 alone", b.indexHost, b.filesHost)}
+		vd := verdict{Served: false, Reason: fmt.Sprintf("CONNECT reaches %s:443 and %s:443 alone", b.indexHost, b.filesHost)}
 		b.g.record(r, b.up, "connect", r.Host, "", vd)
 		http.Error(w, "via-maris refused CONNECT to "+r.Host+": "+vd.Reason, http.StatusForbidden)
 		return
@@ -310,7 +310,7 @@ func (g *gateway) pypiJSON(w http.ResponseWriter, r *http.Request, up *Upstream,
 	if listed, ok := doc["urls"].([]any); ok {
 		doc["urls"] = mark(listed)
 	}
-	g.record(r, up, "metadata", project, "", verdict{true, fmt.Sprintf("%d of %d files refused", refused, total)})
+	g.record(r, up, "metadata", project, "", verdict{Served: true, Reason: fmt.Sprintf("%d of %d files refused", refused, total)})
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(doc)
 }

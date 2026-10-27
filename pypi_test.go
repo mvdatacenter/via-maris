@@ -166,6 +166,11 @@ func TestPyPIFileIsCheckedAgainstItsIndexEntry(t *testing.T) {
 	if status != http.StatusOK || body != "file packages/ab/nvidia_clara_sim-0.0.0a0-py3-none-any.whl.metadata" {
 		t.Errorf("metadata: %d %q", status, body)
 	}
+	if rec := env.lastRecord(); rec.Kind != "metadata" {
+		t.Errorf("record %+v", rec)
+	} else if p, err := time.Parse(time.RFC3339Nano, rec.Published); err != nil || time.Since(p).Round(time.Hour) != 100*day {
+		t.Errorf("published %q, want the refused file's upload time, 100 days ago", rec.Published)
+	}
 
 	status, body = env.get("/pypi/files/packages/ab/nvidia_clara_sim-0.0.1-py3-none-any.whl")
 	if status != http.StatusOK || body != "file packages/ab/nvidia_clara_sim-0.0.1-py3-none-any.whl" {

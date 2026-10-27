@@ -98,6 +98,10 @@ func (g *gateway) record(r *http.Request, up *Upstream, kind, pkg, version strin
 	if err != nil {
 		host = r.RemoteAddr
 	}
+	var published string
+	if !v.Published.IsZero() {
+		published = v.Published.UTC().Format(time.RFC3339Nano)
+	}
 	g.records.write(record{
 		Time:      time.Now().UTC().Format(time.RFC3339Nano),
 		Client:    host,
@@ -108,5 +112,6 @@ func (g *gateway) record(r *http.Request, up *Upstream, kind, pkg, version strin
 		Version:   version,
 		Served:    v.Served,
 		Reason:    v.Reason,
+		Published: published,
 	})
 }
