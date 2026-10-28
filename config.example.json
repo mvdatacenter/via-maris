@@ -88,6 +88,13 @@
     "upstream": "pypi",
     "cert": "/etc/via-maris/tls/tls.crt",
     "key": "/etc/via-maris/tls/tls.key",
-    "ca": "/etc/via-maris/tls/ca.crt"
+    "ca": "/etc/via-maris/tls/ca.crt",
+    "npm": {
+      "upstream": "npm",
+      "hosts": ["registry.npmjs.org", "registry.yarnpkg.com"],
+      "cert": "/etc/via-maris/npm-tls/tls.crt",
+      "key": "/etc/via-maris/npm-tls/tls.key",
+      "ca": "/etc/via-maris/npm-tls/ca.crt"
+    }
   }
 }

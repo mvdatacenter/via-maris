@@ -85,11 +85,20 @@ type Store struct {
 }
 
 type ByName struct {
-	Listen   string `json:"listen"`
-	Upstream string `json:"upstream"`
-	Cert     string `json:"cert"`
-	Key      string `json:"key"`
-	CA       string `json:"ca"`
+	Listen   string     `json:"listen"`
+	Upstream string     `json:"upstream"`
+	Cert     string     `json:"cert"`
+	Key      string     `json:"key"`
+	CA       string     `json:"ca"`
+	NPM      *NPMByName `json:"npm"`
+}
+
+type NPMByName struct {
+	Upstream string   `json:"upstream"`
+	Hosts    []string `json:"hosts"`
+	Cert     string   `json:"cert"`
+	Key      string   `json:"key"`
+	CA       string   `json:"ca"`
 }
 
 type Config struct {
@@ -219,9 +228,44 @@ func (b *ByName) validate(c *Config) error {
 		if index.Hostname() == files.Hostname() {
 			return fmt.Errorf("byName.upstream %s serves its index and files from one host, so its requests cannot be told apart by name", b.Upstream)
 		}
+		if b.NPM != nil {
+			return b.NPM.validate(c, index.Hostname(), files.Hostname())
+		}
 		return nil
 	}
 	return fmt.Errorf("byName.upstream %q names no upstream", b.Upstream)
+}
+
+func (n *NPMByName) validate(c *Config, pypiHosts ...string) error {
+	if n.Cert == "" || n.Key == "" || n.CA == "" {
+		return errors.New("byName.npm needs cert, key and ca files")
+	}
+	for _, u := range c.Upstreams {
+		if u.Name != n.Upstream {
+			continue
+		}
+		if u.Ecosystem != "npm" {
+			return fmt.Errorf("byName.npm.upstream %s is not an npm upstream", n.Upstream)
+		}
+		registry, _ := url.Parse(u.URL)
+		seen := map[string]bool{}
+		for _, h := range n.Hosts {
+			if h == "" || strings.ContainsAny(h, ":/") || seen[h] {
+				return fmt.Errorf("byName.npm.hosts entry %q is not a bare host name, or is repeated", h)
+			}
+			for _, p := range pypiHosts {
+				if h == p {
+					return fmt.Errorf("byName.npm.hosts entry %s is already a PyPI name", h)
+				}
+			}
+			seen[h] = true
+		}
+		if !seen[registry.Hostname()] {
+			return fmt.Errorf("byName.npm.hosts must include %s, the host of upstream %s", registry.Hostname(), n.Upstream)
+		}
+		return nil
+	}
+	return fmt.Errorf("byName.npm.upstream %q names no upstream", n.Upstream)
 }
 
 func (u *Upstream) validate(seen map[string]bool) error {
