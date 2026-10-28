@@ -15,6 +15,7 @@ type fakeNPM struct {
 	srv      *httptest.Server
 	packages map[string]map[string]time.Duration
 	tags     map[string]map[string]string
+	base     string
 }
 
 func newFakeNPM(t *testing.T) *fakeNPM {
@@ -37,10 +38,14 @@ func newFakeNPM(t *testing.T) *fakeNPM {
 			return
 		}
 		doc := map[string]any{"name": p, "versions": map[string]any{}, "time": map[string]any{}, "dist-tags": f.tags[p]}
+		base := f.base
+		if base == "" {
+			base = f.srv.URL
+		}
 		for v, age := range versions {
 			doc["versions"].(map[string]any)[v] = map[string]any{
 				"name": p, "version": v,
-				"dist": map[string]any{"tarball": f.srv.URL + "/" + p + "/-/" + path.Base(p) + "-" + v + ".tgz"},
+				"dist": map[string]any{"tarball": base + "/" + p + "/-/" + path.Base(p) + "-" + v + ".tgz"},
 			}
 			if age >= 0 {
 				doc["time"].(map[string]any)[v] = ago(age)

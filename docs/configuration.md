@@ -23,7 +23,7 @@ cosign verify ghcr.io/mvdatacenter/via-maris:<tag> \
 - `inUse`: an object in an S3-compatible store that lists the versions already in use, shaped `{"generated": "<RFC 3339>", "ecosystems": {"npm": {"<package>": ["<version>"]}}}`. The re-check writes it. A version inside the hold is served when it fixes an advisory against a version in that list. `maxAge` bounds how stale the object may be.
 - `records`: where decision records are uploaded, as NDJSON batches under `prefix`. A record is written to stdout for every decision. A record of a version whose publication time the check read carries that time as `published`, so it stays known after the upstream removes the version. For a Go module that time is when the module proxy first served the version, which the gateway reads from the Go index for the last hold and an hour, so a Go version first served before then carries none. Once the oldest unshipped record is older than `maxUnshipped`, every request is answered 503.
 - `upstreams`: one entry per registry fronted, served under `/<name>/`.
-- `byName` (optional): serves one PyPI upstream under the host names of its `url` and `files`, as [PyPI by its own names](#pypi-by-its-own-names) describes. `listen` is the TLS listener's address, `upstream` names the PyPI upstream, and `cert`, `key` and `ca` are the files holding the leaf certificate, its key and the CA certificate that signed it.
+- `byName` (optional): serves one PyPI upstream under the host names of its `url` and `files`, as [PyPI by its own names](#pypi-by-its-own-names) describes. `listen` is the TLS listener's address, `upstream` names the PyPI upstream, and `cert`, `key` and `ca` are the files holding the leaf certificate, its key and the CA certificate that signed it. `npm` (optional) serves one npm upstream on the same listener, as [npm by its own names](#npm-by-its-own-names) describes: `upstream` names it, `hosts` lists the names it answers, and `cert`, `key` and `ca` are its own.
 
 The access keys for both stores are read from the environment variables the store names. A store's endpoint is given either as `endpoint` or, when it carries a value kept out of the configuration such as an account id, as `endpointEnv`, the environment variable that holds it.
 
@@ -71,10 +71,25 @@ A client reaches it in either of two ways:
 
 Every client that installs through `byName` trusts the CA in `ca`, so that CA should carry name constraints permitting the two host names alone. The gateway reads the leaf, key and CA from files and checks them on each handshake, so a certificate manager that replaces them on renewal needs no restart. A pair that fails to load leaves the previous one in use. Until a pair has loaded, `/healthz` reports the TLS certificate as not ready and the listener refuses handshakes. The listener speaks HTTP/1.1 alone, so a refusal reaches pip in the status line.
 
+## npm by its own names
+
+npm and yarn lockfiles record each tarball's full URL, and yarn 1 fetches that URL as written whatever registry it is set to. A lock resolved at the public registry names `registry.npmjs.org` or `registry.yarnpkg.com`. `byName.npm` lets those installs reach the check with the lock unchanged. `hosts` must include the host of the upstream's `url`. The names are served on the `byName.listen` port, and reached either through a host entry or through `CONNECT`, as the PyPI names are. Each handshake is given the certificate for its server name.
+
+- `/<package>` is the packument, rewritten as the `/<name>/` path rewrites it, except that each tarball URL is left as the upstream lists it.
+- `/<package>/-/<file>.tgz` is checked as the `/<name>/` tarball path is, and is served only when a version of the package lists that file.
+- Every other path is answered as the `/<name>/` path answers it.
+
+| Client | Setting |
+| --- | --- |
+| npm, yarn 1 | `https-proxy=http://via-maris:8480`, `noproxy=npm.pkg.github.com` and `cafile=<bundle with the CA>` in `~/.npmrc`, with no `registry` |
+| a pod or runner whose `hostAliases` map the names | `npm_config_cafile=<bundle with the CA>` |
+
+The npm `ca` should carry name constraints permitting the npm hosts alone, so a key that leaks signs nothing but them.
+
 ## Operating
 
-- `GET /healthz` answers 503 and names what is not ready: an ecosystem's advisory data, a Go index, the record upload, or with `byName` the TLS certificate. A stale in-use set only stops fix releases from passing the hold, so the gateway stays ready.
-- `GET /metrics` serves Prometheus text. With `byName`, `via_maris_tls_expiry_timestamp_seconds` gives the leaf's and the CA's expiry as Unix time, labelled `certificate="leaf"` and `certificate="ca"`, and 0 before a pair has loaded.
+- `GET /healthz` answers 503 and names what is not ready: an ecosystem's advisory data, a Go index, the record upload, or with `byName` the TLS certificate and, with `byName.npm`, the npm TLS certificate. A stale in-use set only stops fix releases from passing the hold, so the gateway stays ready.
+- `GET /metrics` serves Prometheus text. With `byName`, `via_maris_tls_expiry_timestamp_seconds` gives the leaf's and the CA's expiry as Unix time, labelled `certificate="leaf"` and `certificate="ca"` (and `certificate="npm-leaf"` and `certificate="npm-ca"` with `byName.npm`), and 0 before a pair has loaded.
 
 A refused version is answered 403, with the refusal reason in the response.
 

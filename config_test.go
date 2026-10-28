@@ -30,6 +30,13 @@ func TestExampleConfigLoads(t *testing.T) {
 	if cfg.ByName == nil || cfg.ByName.Upstream != "pypi" {
 		t.Errorf("byName %+v", cfg.ByName)
 	}
+	if n := cfg.ByName.NPM; n == nil || n.Upstream != "npm" || strings.Join(n.Hosts, " ") != "registry.npmjs.org registry.yarnpkg.com" {
+		t.Errorf("byName.npm %+v", cfg.ByName.NPM)
+	}
+}
+
+func byNameNPM(c map[string]any) map[string]any {
+	return c["byName"].(map[string]any)["npm"].(map[string]any)
 }
 
 func writeVariant(t *testing.T, edit func(c map[string]any)) string {
@@ -100,6 +107,12 @@ func TestConfigRefusals(t *testing.T) {
 		{"by name on the main listener", func(c map[string]any) { c["byName"].(map[string]any)["listen"] = ":8480" }, "byName.listen is required and differs from listen"},
 		{"by name without a CA", func(c map[string]any) { delete(c["byName"].(map[string]any), "ca") }, "byName needs cert, key and ca files"},
 		{"by name with files on the index host", func(c map[string]any) { upstreamAt(c, 1)["files"] = "https://pypi.org/files" }, "serves its index and files from one host"},
+		{"npm by name on pypi", func(c map[string]any) { byNameNPM(c)["upstream"] = "pypi" }, "byName.npm.upstream pypi is not an npm upstream"},
+		{"npm by name on no upstream", func(c map[string]any) { byNameNPM(c)["upstream"] = "yarn" }, `byName.npm.upstream "yarn" names no upstream`},
+		{"npm by name without a key", func(c map[string]any) { delete(byNameNPM(c), "key") }, "byName.npm needs cert, key and ca files"},
+		{"npm by name without the registry's host", func(c map[string]any) { byNameNPM(c)["hosts"] = []any{"registry.yarnpkg.com"} }, "byName.npm.hosts must include registry.npmjs.org"},
+		{"npm by name on a PyPI name", func(c map[string]any) { byNameNPM(c)["hosts"] = []any{"registry.npmjs.org", "pypi.org"} }, "byName.npm.hosts entry pypi.org is already a PyPI name"},
+		{"npm by name with a port", func(c map[string]any) { byNameNPM(c)["hosts"] = []any{"registry.npmjs.org:443"} }, `byName.npm.hosts entry "registry.npmjs.org:443" is not a bare host name`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := loadConfig(writeVariant(t, c.edit))

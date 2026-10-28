@@ -18,24 +18,38 @@ import (
 	"time"
 )
 
-// byName is the front end "PyPI by its own names" in docs/configuration.md describes.
+// byName is the front end "PyPI and npm by their own names" in
+// docs/configuration.md describes.
 type byName struct {
 	g                    *gateway
 	up                   *Upstream
 	indexHost, filesHost string
 	indexPath, filesPath string
 	certs                *certFiles
+	npm                  *npmByName
+	pypiH                http.HandlerFunc
 	tunnels              *tunnelListener
 	srv                  *http.Server
 }
 
-func newByName(g *gateway, cfg *ByName) *byName {
-	var up *Upstream
+type npmByName struct {
+	up    *Upstream
+	hosts []string
+	certs *certFiles
+	h     http.HandlerFunc
+}
+
+func upstreamNamed(g *gateway, name string) *Upstream {
 	for i := range g.cfg.Upstreams {
-		if g.cfg.Upstreams[i].Name == cfg.Upstream {
-			up = &g.cfg.Upstreams[i]
+		if g.cfg.Upstreams[i].Name == name {
+			return &g.cfg.Upstreams[i]
 		}
 	}
+	return nil
+}
+
+func newByName(g *gateway, cfg *ByName) *byName {
+	up := upstreamNamed(g, cfg.Upstream)
 	index, _ := url.Parse(up.URL)
 	files, _ := url.Parse(up.Files)
 	b := &byName{
@@ -48,8 +62,20 @@ func newByName(g *gateway, cfg *ByName) *byName {
 		certs:     &certFiles{cert: cfg.Cert, key: cfg.Key, ca: cfg.CA},
 		tunnels:   newTunnelListener(),
 	}
+	b.pypiH = g.gated(up, b.pypi)
+	if cfg.NPM != nil {
+		n := &npmByName{
+			up:    upstreamNamed(g, cfg.NPM.Upstream),
+			hosts: cfg.NPM.Hosts,
+			certs: &certFiles{cert: cfg.NPM.Cert, key: cfg.NPM.Key, ca: cfg.NPM.CA},
+		}
+		n.h = g.gated(n.up, func(w http.ResponseWriter, r *http.Request) {
+			g.npmPath(w, r, n.up, strings.TrimPrefix(r.URL.EscapedPath(), "/"), func(_, tb string) string { return tb })
+		})
+		b.npm = n
+	}
 	b.srv = &http.Server{
-		Handler:           g.gated(up, b.serve),
+		Handler:           http.HandlerFunc(b.serve),
 		ReadHeaderTimeout: 30 * time.Second,
 		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: b.certificate},
 		TLSNextProto:      map[string]func(*http.Server, *tls.Conn, http.Handler){},
@@ -57,11 +83,41 @@ func newByName(g *gateway, cfg *ByName) *byName {
 	return b
 }
 
-func (b *byName) certificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-	if hello.ServerName != b.indexHost && hello.ServerName != b.filesHost {
-		return nil, fmt.Errorf("via-maris answers TLS for %s and %s alone, not %q", b.indexHost, b.filesHost, hello.ServerName)
+func (b *byName) names() []string {
+	names := []string{b.indexHost, b.filesHost}
+	if b.npm != nil {
+		names = append(names, b.npm.hosts...)
 	}
-	return b.certs.current()
+	return names
+}
+
+func (b *byName) npmHost(host string) bool {
+	if b.npm == nil {
+		return false
+	}
+	for _, h := range b.npm.hosts {
+		if h == host {
+			return true
+		}
+	}
+	return false
+}
+
+func joinAnd(names []string) string {
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}
+
+func (b *byName) certificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+	switch {
+	case hello.ServerName == b.indexHost || hello.ServerName == b.filesHost:
+		return b.certs.current()
+	case b.npmHost(hello.ServerName):
+		return b.npm.certs.current()
+	}
+	return nil, fmt.Errorf("via-maris answers TLS for %s alone, not %q", joinAnd(b.names()), hello.ServerName)
 }
 
 func (b *byName) serveTLS(ln net.Listener) error {
@@ -72,6 +128,18 @@ func (b *byName) serveTLS(ln net.Listener) error {
 }
 
 func (b *byName) serve(w http.ResponseWriter, r *http.Request) {
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if b.npmHost(host) {
+		b.npm.h(w, r)
+		return
+	}
+	b.pypiH(w, r)
+}
+
+func (b *byName) pypi(w http.ResponseWriter, r *http.Request) {
 	host := r.Host
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
@@ -118,9 +186,17 @@ func (b *byName) index(w http.ResponseWriter, r *http.Request) {
 
 func (b *byName) connect(w http.ResponseWriter, r *http.Request) {
 	host, port, err := net.SplitHostPort(r.Host)
-	if err != nil || port != "443" || host != b.indexHost && host != b.filesHost {
-		vd := verdict{Served: false, Reason: fmt.Sprintf("CONNECT reaches %s:443 and %s:443 alone", b.indexHost, b.filesHost)}
-		b.g.record(r, b.up, "connect", r.Host, "", vd)
+	up := b.up
+	if b.npmHost(host) {
+		up = b.npm.up
+	}
+	if err != nil || port != "443" || host != b.indexHost && host != b.filesHost && !b.npmHost(host) {
+		var allowed []string
+		for _, n := range b.names() {
+			allowed = append(allowed, n+":443")
+		}
+		vd := verdict{Served: false, Reason: "CONNECT reaches " + joinAnd(allowed) + " alone"}
+		b.g.record(r, up, "connect", r.Host, "", vd)
 		http.Error(w, "via-maris refused CONNECT to "+r.Host+": "+vd.Reason, http.StatusForbidden)
 		return
 	}

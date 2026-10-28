@@ -143,6 +143,11 @@ func (g *gateway) notReady() []string {
 		if _, err := g.byName.certs.current(); err != nil {
 			out = append(out, "tls certificate")
 		}
+		if g.byName.npm != nil {
+			if _, err := g.byName.npm.certs.current(); err != nil {
+				out = append(out, "npm tls certificate")
+			}
+		}
 	}
 	sort.Strings(out)
 	return out
@@ -185,6 +190,11 @@ func (g *gateway) metrics(w http.ResponseWriter, r *http.Request) {
 		leaf, ca := g.byName.certs.expiry()
 		fmt.Fprintf(w, "via_maris_tls_expiry_timestamp_seconds{certificate=\"leaf\"} %d\n", unixOrZero(leaf))
 		fmt.Fprintf(w, "via_maris_tls_expiry_timestamp_seconds{certificate=\"ca\"} %d\n", unixOrZero(ca))
+		if g.byName.npm != nil {
+			leaf, ca := g.byName.npm.certs.expiry()
+			fmt.Fprintf(w, "via_maris_tls_expiry_timestamp_seconds{certificate=\"npm-leaf\"} %d\n", unixOrZero(leaf))
+			fmt.Fprintf(w, "via_maris_tls_expiry_timestamp_seconds{certificate=\"npm-ca\"} %d\n", unixOrZero(ca))
+		}
 	}
 }
 
@@ -280,12 +290,17 @@ func main() {
 		if _, err := g.byName.certs.current(); err != nil {
 			log.Printf("tls certificate: %v; the by-name listener refuses handshakes until it loads", err)
 		}
+		if g.byName.npm != nil {
+			if _, err := g.byName.npm.certs.current(); err != nil {
+				log.Printf("npm tls certificate: %v; the npm names refuse handshakes until it loads", err)
+			}
+		}
 		ln, err := net.Listen("tcp", cfg.ByName.Listen)
 		if err != nil {
 			log.Fatal(err)
 		}
 		go func() { served <- g.byName.serveTLS(ln) }()
-		log.Printf("serving %s and %s by name on %s", g.byName.indexHost, g.byName.filesHost, cfg.ByName.Listen)
+		log.Printf("serving %s by name on %s", joinAnd(g.byName.names()), cfg.ByName.Listen)
 	}
 	select {
 	case err := <-served:

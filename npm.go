@@ -18,6 +18,12 @@ var npmPassthrough = []string{"-/npm/v1/security/", "-/ping"}
 
 func (g *gateway) npm(w http.ResponseWriter, r *http.Request, up *Upstream) {
 	rest := strings.TrimPrefix(r.URL.EscapedPath(), "/"+up.Name+"/")
+	g.npmPath(w, r, up, rest, func(name, tb string) string {
+		return baseURL(r) + "/" + up.Name + "/" + name + "/-/" + path.Base(tb)
+	})
+}
+
+func (g *gateway) npmPath(w http.ResponseWriter, r *http.Request, up *Upstream, rest string, tarballURL func(name, tb string) string) {
 	if strings.HasPrefix(rest, "-/") {
 		for _, p := range npmPassthrough {
 			if strings.HasPrefix(rest, p) {
@@ -50,7 +56,7 @@ func (g *gateway) npm(w http.ResponseWriter, r *http.Request, up *Upstream) {
 	case name == "" || name == "@/" || strings.Contains(name, ".."):
 		http.NotFound(w, r)
 	case len(tail) == 0:
-		g.npmPackument(w, r, up, name)
+		g.npmPackument(w, r, up, name, tarballURL)
 	case len(tail) == 2 && tail[0] == "-":
 		g.npmTarball(w, r, up, name, tail[1])
 	default:
@@ -113,9 +119,9 @@ func npmPublished(doc map[string]any, version string) time.Time {
 
 // npmPackument serves the packument with every refused version marked
 // deprecated by its reason, so a range resolves to a version that is served
-// and an exact pin fails at its tarball naming why. Each tarball URL points
-// back through the gateway.
-func (g *gateway) npmPackument(w http.ResponseWriter, r *http.Request, up *Upstream, name string) {
+// and an exact pin fails at its tarball naming why. Each tarball URL is the
+// one tarballURL gives.
+func (g *gateway) npmPackument(w http.ResponseWriter, r *http.Request, up *Upstream, name string, tarballURL func(name, tb string) string) {
 	doc, status, err := g.packument(r.Context(), up, name)
 	if err != nil {
 		upstreamError(w, err)
@@ -135,7 +141,7 @@ func (g *gateway) npmPackument(w http.ResponseWriter, r *http.Request, up *Upstr
 		}
 		if dist, ok := man["dist"].(map[string]any); ok {
 			if tb, ok := dist["tarball"].(string); ok {
-				dist["tarball"] = baseURL(r) + "/" + up.Name + "/" + name + "/-/" + path.Base(tb)
+				dist["tarball"] = tarballURL(name, tb)
 			}
 		}
 		vd := g.check(up, name, v, npmPublished(doc, v))
