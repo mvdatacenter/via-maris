@@ -73,7 +73,7 @@ Every client that installs through `byName` trusts the CA in `ca`, so that CA sh
 
 ## npm by its own names
 
-npm and yarn lockfiles record each tarball's full URL, and yarn 1 fetches that URL as written whatever registry it is set to. A lock resolved at the public registry names `registry.npmjs.org` or `registry.yarnpkg.com`. `byName.npm` lets those installs reach the check with the lock unchanged. It names an `npm` upstream, the `hosts` to answer for it, and a `cert`, `key` and `ca` of its own. `hosts` must include the host of the upstream's `url`. The names are served on the `byName.listen` port, and reached either through a host entry or through `CONNECT`, as the PyPI names are. Each handshake is given the certificate for its server name.
+npm and yarn lockfiles record each tarball's full URL, and yarn 1 fetches that URL as written whatever registry it is set to. A lock resolved at the public registry names `registry.npmjs.org` or `registry.yarnpkg.com`. `byName.npm` lets those installs reach the check with the lock unchanged. `hosts` must include the host of the upstream's `url`. The names are served on the `byName.listen` port, and reached either through a host entry or through `CONNECT`, as the PyPI names are. Each handshake is given the certificate for its server name.
 
 - `/<package>` is the packument, rewritten as the `/<name>/` path rewrites it, except that each tarball URL is left as the upstream lists it.
 - `/<package>/-/<file>.tgz` is checked as the `/<name>/` tarball path is, and is served only when a version of the package lists that file.
@@ -84,7 +84,7 @@ npm and yarn lockfiles record each tarball's full URL, and yarn 1 fetches that U
 | npm, yarn 1 | `https-proxy=http://via-maris:8480`, `noproxy=npm.pkg.github.com` and `cafile=<bundle with the CA>` in `~/.npmrc`, with no `registry` |
 | a pod or runner whose `hostAliases` map the names | `npm_config_cafile=<bundle with the CA>` |
 
-The npm `ca` should carry name constraints permitting the npm hosts alone, so a key that leaks signs nothing but them. `/healthz` reports `npm tls certificate` until its pair loads, and the PyPI names keep serving while it does. `/metrics` reports its expiry under `certificate="npm-leaf"` and `certificate="npm-ca"`.
+The npm `ca` should carry name constraints permitting the npm hosts alone, so a key that leaks signs nothing but them.
 
 ## Operating
 
