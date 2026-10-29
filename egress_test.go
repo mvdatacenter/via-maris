@@ -134,10 +134,10 @@ func metricsText(c *unlistedCounter) string {
 func TestCounterShowsEachNamespaceBeforeItsFirstEvent(t *testing.T) {
 	out := metricsText(newUnlistedCounter([]string{"arc-runners", "workspace"}))
 	for _, want := range []string{
-		`via_maris_egress_unlisted_total{namespace="arc-runners",kind="connection",destination="other"} 0`,
-		`via_maris_egress_unlisted_total{namespace="arc-runners",kind="dns",destination="other"} 0`,
-		`via_maris_egress_unlisted_total{namespace="workspace",kind="connection",destination="other"} 0`,
-		`via_maris_egress_unlisted_total{namespace="workspace",kind="dns",destination="other"} 0`,
+		`via_maris_egress_unlisted_total{policy_namespace="arc-runners",kind="connection",destination="other"} 0`,
+		`via_maris_egress_unlisted_total{policy_namespace="arc-runners",kind="dns",destination="other"} 0`,
+		`via_maris_egress_unlisted_total{policy_namespace="workspace",kind="connection",destination="other"} 0`,
+		`via_maris_egress_unlisted_total{policy_namespace="workspace",kind="dns",destination="other"} 0`,
 		"via_maris_egress_lost_events_total 0",
 	} {
 		if !strings.Contains(out, want) {
@@ -158,10 +158,10 @@ func TestCounterFoldsNamesPastTheCapUnderOther(t *testing.T) {
 	c.addLost(3)
 	out := metricsText(c)
 	for _, want := range []string{
-		`{namespace="workspace",kind="dns",destination="n0.example."} 2`,
-		`{namespace="workspace",kind="dns",destination="other"} 2`,
-		`{namespace="workspace",kind="connection",destination="pypi.org"} 1`,
-		`{namespace="workspace",kind="connection",destination="other"} 0`,
+		`{policy_namespace="workspace",kind="dns",destination="n0.example."} 2`,
+		`{policy_namespace="workspace",kind="dns",destination="other"} 2`,
+		`{policy_namespace="workspace",kind="connection",destination="pypi.org"} 1`,
+		`{policy_namespace="workspace",kind="connection",destination="other"} 0`,
 		"via_maris_egress_lost_events_total 3",
 	} {
 		if !strings.Contains(out, want) {
@@ -275,10 +275,10 @@ func TestObserveFlowCountsWhatEnforcementWouldRefuse(t *testing.T) {
 
 	out := metricsText(c)
 	for _, want := range []string{
-		`{namespace="workspace",kind="dns",destination="pypi.org."} 3`,
-		`{namespace="workspace",kind="dns",destination="pypi.org.lan."} 1`,
-		`{namespace="workspace",kind="connection",destination="pypi.org"} 1`,
-		`{namespace="workspace",kind="connection",destination="151.101.0.223"} 1`,
+		`{policy_namespace="workspace",kind="dns",destination="pypi.org."} 3`,
+		`{policy_namespace="workspace",kind="dns",destination="pypi.org.lan."} 1`,
+		`{policy_namespace="workspace",kind="connection",destination="pypi.org"} 1`,
+		`{policy_namespace="workspace",kind="connection",destination="151.101.0.223"} 1`,
 		"via_maris_egress_lost_events_total 7",
 	} {
 		if !strings.Contains(out, want) {
@@ -510,8 +510,8 @@ func TestEgressObserveCountsUntilTheRelayStreamEnds(t *testing.T) {
 	}
 	out := metricsText(c)
 	for _, want := range []string{
-		`{namespace="workspace",kind="dns",destination="pypi.org."} 1`,
-		`{namespace="workspace",kind="connection",destination="pypi.org"} 1`,
+		`{policy_namespace="workspace",kind="dns",destination="pypi.org."} 1`,
+		`{policy_namespace="workspace",kind="connection",destination="pypi.org"} 1`,
 		"via_maris_egress_lost_events_total 2",
 	} {
 		if !strings.Contains(out, want) {

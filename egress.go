@@ -267,7 +267,7 @@ func (c *unlistedCounter) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&buf, "via_maris_build_info{version=%q} 1\n", version)
 	buf.WriteString("# TYPE via_maris_egress_unlisted_total counter\n")
 	for _, k := range keys {
-		fmt.Fprintf(&buf, "via_maris_egress_unlisted_total{namespace=%q,kind=%q,destination=%q} %d\n", k.namespace, k.kind, k.destination, c.counts[k])
+		fmt.Fprintf(&buf, "via_maris_egress_unlisted_total{policy_namespace=%q,kind=%q,destination=%q} %d\n", k.namespace, k.kind, k.destination, c.counts[k])
 	}
 	buf.WriteString("# TYPE via_maris_egress_lost_events_total counter\n")
 	fmt.Fprintf(&buf, "via_maris_egress_lost_events_total %d\n", c.lost)
