@@ -1,0 +1,8 @@
+{
+  "listen": ":8481",
+  "relay": "hubble-relay.kube-system.svc.cluster.local:80",
+  "policies": [
+    {"namespace": "arc-runners", "name": "arc-runners-egress"},
+    {"namespace": "workspace", "name": "workspace-egress"}
+  ]
+}

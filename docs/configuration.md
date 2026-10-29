@@ -1,6 +1,6 @@
 # Configuring and pointing clients at via-maris
 
-`via-maris` is a single Go program built from the standard library alone. The gateway reads one JSON file, named as its only argument. [`config.example.json`](../config.example.json) carries every field. A configuration with an unknown field or one that fails validation stops the gateway at startup. `via-maris recheck <recheck.json>` runs the re-check instead, as [The re-check](#the-re-check) describes.
+`via-maris` is a single Go program built from the standard library alone. The gateway reads one JSON file, named as its only argument. [`config.example.json`](../config.example.json) carries every field. A configuration with an unknown field or one that fails validation stops the gateway at startup. `via-maris recheck <recheck.json>` runs the re-check instead, as [The re-check](#the-re-check) describes, and `via-maris egress-observe <egress-observe.json>` the egress observer, as [The egress observer](#the-egress-observer) describes.
 
 ```
 go test ./...
@@ -105,3 +105,18 @@ A refused version is answered 403, with the refusal reason in the response.
 6. Writes the in-use set to `inUse`: every locked version, and every version the gateway served within `servedWindow`, read from the decision records under `records`. Only records uploaded since the last pass are read, starting `records.overlap` earlier to catch a slow upload. When the previous set is missing or cannot be parsed, the whole window is read again; when the store cannot be reached, the pass fails. The set is stamped with the time the pass started. Just before the write the pass reads the set's ETag again, and the write itself is conditional on that ETag, so when two passes overlap, the one that read an older set fails rather than replacing a newer one. Garage v2.4.1 does not apply those conditions: run against it, a PUT with a stale `If-Match` and a second PUT with `If-None-Match: *` both replaced the object. There a write landing between the re-read and the pass's own write still wins. What it replaced is back after the next pass, because each set holds everything up to the records position it names and the next pass reads the records again from there. A scheduler runs one pass at a time, so the set does not step back in between.
 
 Any failure exits non-zero and leaves the previous set in place, where the gateway's `inUse.maxAge` reads its age. The image carries OSV-Scanner at `/osv-scanner`. Neither binary has a writable directory of its own, so `workDir` must be a mounted writable volume.
+
+## The egress observer
+
+`via-maris egress-observe <egress-observe.json>` counts what Cilium egress policies observed with `enableDefaultDeny.egress: false` would refuse once enforced. [`egress-observe.example.json`](../egress-observe.example.json) carries every field: `listen` for `/metrics`, `relay` for Hubble's relay as `host:port`, and `policies`, one CiliumNetworkPolicy per namespace.
+
+It runs in a pod and reads each policy from the API server as the pod's service account. A Role that names the policy by `resourceNames` is enough: the observer lists and watches with the field selector `metadata.name=<policy>`, which such a grant requires, and applies each change the watch reports. When the API server ends a watch, the observer lists the policy again and watches from there. It reads the policy's `spec.endpointSelector.matchLabels` and the `rules.dns` of every `spec.egress[].toPorts[]`, and refuses a policy with `specs` or a selector with `matchExpressions`.
+
+It follows the relay over gRPC on unencrypted HTTP/2 for the policy verdicts and L7 records of each namespace's pods, keeps the events of pods the policy selects, and counts two kinds:
+
+- `dns`: a DNS request whose name none of the policy's DNS rules matches, matched as Cilium matches `matchName` and `matchPattern`. Enforced, it gets Cilium's DNS reject answer.
+- `connection`: an egress connection whose policy verdict names `allow-any-egress`, the rule Cilium adds when default deny is off. Enforced, it is dropped. It is labelled with the destination's DNS name, or its address when it has none.
+
+`GET /metrics` serves `via_maris_egress_unlisted_total{namespace,kind,destination}` and `via_maris_egress_lost_events_total`, the events the relay reports lost. Each namespace and kind holds at most 256 destinations; a further one is counted under `destination="other"` and logged. The `other` series exists for every namespace and kind from the start, so each namespace shows before its first event.
+
+The observer exits non-zero when the relay stream ends or sends a message it cannot parse, or when a policy is deleted, cannot be read, or changes to one it refuses, so each shows as the observer down.

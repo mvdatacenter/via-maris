@@ -6,6 +6,8 @@ A version listed as malicious in published advisory data is refused, and so is a
 
 `via-maris recheck` runs the same check over what is already in use. It reads every lockfile in an organization's repositories, alerts on each locked version now listed as malicious, and writes the list of versions in use, so a fix for one of them passes the hold.
 
+`via-maris egress-observe` counts what a Cilium egress policy not yet enforced would refuse.
+
 The gateway keeps nothing that cannot be fetched again from upstream. Its behaviour comes entirely from configuration: the list of upstream registries it fronts and the policy applied to each.
 
 The name comes from the Via Maris, the Way of the Sea, the ancient road from Egypt through Galilee to Damascus.
