@@ -508,8 +508,6 @@ func (r *holdLagRun) run(ctx context.Context, month time.Time, now time.Time) (*
 		}
 		rep.Ecosystems = append(rep.Ecosystems, r.measure(up, ls, dates))
 	}
-	// PyPI's registry removes most malicious projects, so its own month is
-	// usually thin; its hold then follows npm's curve.
 	for i := range rep.Ecosystems {
 		if e := &rep.Ecosystems[i]; e.Ecosystem == "PyPI" && e.Thin {
 			for _, o := range rep.Ecosystems {
