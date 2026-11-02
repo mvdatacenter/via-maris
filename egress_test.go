@@ -138,7 +138,8 @@ func TestCounterShowsEachNamespaceBeforeItsFirstEvent(t *testing.T) {
 		`via_maris_egress_unlisted_total{policy_namespace="arc-runners",kind="dns",destination="other"} 0`,
 		`via_maris_egress_unlisted_total{policy_namespace="workspace",kind="connection",destination="other"} 0`,
 		`via_maris_egress_unlisted_total{policy_namespace="workspace",kind="dns",destination="other"} 0`,
-		"via_maris_egress_lost_events_total 0",
+		`via_maris_egress_lost_events_total{source="HUBBLE_RING_BUFFER"} 0`,
+		`via_maris_egress_lost_events_total{source="PERF_EVENT_RING_BUFFER"} 0`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("metrics lack %s:\n%s", want, out)
@@ -155,14 +156,16 @@ func TestCounterFoldsNamesPastTheCapUnderOther(t *testing.T) {
 	c.add("workspace", "dns", "past.example.")
 	c.add("workspace", "dns", "past.example.")
 	c.add("workspace", "connection", "pypi.org")
-	c.addLost(3)
+	c.addLost(3, 3)
+	c.addLost(9, 1)
 	out := metricsText(c)
 	for _, want := range []string{
 		`{policy_namespace="workspace",kind="dns",destination="n0.example."} 2`,
 		`{policy_namespace="workspace",kind="dns",destination="other"} 2`,
 		`{policy_namespace="workspace",kind="connection",destination="pypi.org"} 1`,
 		`{policy_namespace="workspace",kind="connection",destination="other"} 0`,
-		"via_maris_egress_lost_events_total 3",
+		`via_maris_egress_lost_events_total{source="HUBBLE_RING_BUFFER"} 3`,
+		`via_maris_egress_lost_events_total{source="9"} 1`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("metrics lack %s", want)
@@ -221,8 +224,8 @@ func (tf testFlow) response() []byte {
 	return pbBytes(nil, respFlow, f)
 }
 
-func lostEvents(n uint64) []byte {
-	return pbBytes(nil, respLostEvents, pbVarint(nil, lostNumEvents, n))
+func lostEvents(source, n uint64) []byte {
+	return pbBytes(nil, respLostEvents, pbVarint(pbVarint(nil, lostSource, source), lostNumEvents, n))
 }
 
 var workspacePod = []string{"k8s:app=workspace", "k8s:io.kubernetes.pod.namespace=workspace"}
@@ -263,7 +266,7 @@ func TestObserveFlowCountsWhatEnforcementWouldRefuse(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := observeFlow(lostEvents(7), set, c); err != nil {
+	if err := observeFlow(lostEvents(1, 7), set, c); err != nil {
 		t.Fatal(err)
 	}
 	if err := observeFlow([]byte{0xff}, set, c); err == nil {
@@ -279,7 +282,7 @@ func TestObserveFlowCountsWhatEnforcementWouldRefuse(t *testing.T) {
 		`{policy_namespace="workspace",kind="dns",destination="pypi.org.lan."} 1`,
 		`{policy_namespace="workspace",kind="connection",destination="pypi.org"} 1`,
 		`{policy_namespace="workspace",kind="connection",destination="151.101.0.223"} 1`,
-		"via_maris_egress_lost_events_total 7",
+		`via_maris_egress_lost_events_total{source="PERF_EVENT_RING_BUFFER"} 7`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("metrics lack %s:\n%s", want, out)
@@ -494,7 +497,7 @@ func TestEgressObserveCountsUntilTheRelayStreamEnds(t *testing.T) {
 		dnsRequest("pypi.org.").response(),
 		dnsRequest("github.com.").response(),
 		policyVerdict("pypi.org", "151.101.0.223", []string{allowAnyEgress}).response(),
-		lostEvents(2),
+		lostEvents(3, 2),
 	})
 	cfg := &EgressConfig{Listen: ":0", Relay: relay}
 	cfg.Policies = append(cfg.Policies, PolicyRef{"workspace", "workspace-egress"})
@@ -512,7 +515,7 @@ func TestEgressObserveCountsUntilTheRelayStreamEnds(t *testing.T) {
 	for _, want := range []string{
 		`{policy_namespace="workspace",kind="dns",destination="pypi.org."} 1`,
 		`{policy_namespace="workspace",kind="connection",destination="pypi.org"} 1`,
-		"via_maris_egress_lost_events_total 2",
+		`via_maris_egress_lost_events_total{source="HUBBLE_RING_BUFFER"} 2`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("metrics lack %s:\n%s", want, out)
