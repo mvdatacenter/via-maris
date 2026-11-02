@@ -19,7 +19,6 @@ import (
 	"os/signal"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -209,7 +208,7 @@ type unlistedCounter struct {
 	mu     sync.Mutex
 	counts map[egressKey]uint64
 	names  map[[2]string]int
-	lost   map[string]uint64
+	lost   [len(lostSources)]uint64
 }
 
 type egressKey struct{ namespace, kind, destination string }
@@ -217,10 +216,7 @@ type egressKey struct{ namespace, kind, destination string }
 var egressKinds = []string{"connection", "dns"}
 
 func newUnlistedCounter(namespaces []string) *unlistedCounter {
-	c := &unlistedCounter{counts: map[egressKey]uint64{}, names: map[[2]string]int{}, lost: map[string]uint64{}}
-	for _, src := range lostSources {
-		c.lost[src] = 0
-	}
+	c := &unlistedCounter{counts: map[egressKey]uint64{}, names: map[[2]string]int{}}
 	for _, ns := range namespaces {
 		for _, kind := range egressKinds {
 			c.counts[egressKey{ns, kind, "other"}] = 0
@@ -246,18 +242,11 @@ func (c *unlistedCounter) add(ns, kind, dst string) {
 }
 
 // docs/configuration.md, "The egress observer", says what each source means.
-var lostSources = []string{"UNKNOWN_LOST_EVENT_SOURCE", "PERF_EVENT_RING_BUFFER", "OBSERVER_EVENTS_QUEUE", "HUBBLE_RING_BUFFER"}
-
-func lostSourceName(v uint64) string {
-	if v < uint64(len(lostSources)) {
-		return lostSources[v]
-	}
-	return strconv.FormatUint(v, 10)
-}
+var lostSources = [...]string{"UNKNOWN_LOST_EVENT_SOURCE", "PERF_EVENT_RING_BUFFER", "OBSERVER_EVENTS_QUEUE", "HUBBLE_RING_BUFFER", "other"}
 
 func (c *unlistedCounter) addLost(source, n uint64) {
 	c.mu.Lock()
-	c.lost[lostSourceName(source)] += n
+	c.lost[min(source, uint64(len(lostSources)-1))] += n
 	c.mu.Unlock()
 }
 
@@ -284,13 +273,8 @@ func (c *unlistedCounter) metrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&buf, "via_maris_egress_unlisted_total{policy_namespace=%q,kind=%q,destination=%q} %d\n", k.namespace, k.kind, k.destination, c.counts[k])
 	}
 	buf.WriteString("# TYPE via_maris_egress_lost_events_total counter\n")
-	sources := make([]string, 0, len(c.lost))
-	for src := range c.lost {
-		sources = append(sources, src)
-	}
-	sort.Strings(sources)
-	for _, src := range sources {
-		fmt.Fprintf(&buf, "via_maris_egress_lost_events_total{source=%q} %d\n", src, c.lost[src])
+	for i, src := range lostSources {
+		fmt.Fprintf(&buf, "via_maris_egress_lost_events_total{source=%q} %d\n", src, c.lost[i])
 	}
 	c.mu.Unlock()
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")

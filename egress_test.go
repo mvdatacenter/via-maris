@@ -140,6 +140,7 @@ func TestCounterShowsEachNamespaceBeforeItsFirstEvent(t *testing.T) {
 		`via_maris_egress_unlisted_total{policy_namespace="workspace",kind="dns",destination="other"} 0`,
 		`via_maris_egress_lost_events_total{source="HUBBLE_RING_BUFFER"} 0`,
 		`via_maris_egress_lost_events_total{source="PERF_EVENT_RING_BUFFER"} 0`,
+		`via_maris_egress_lost_events_total{source="other"} 0`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("metrics lack %s:\n%s", want, out)
@@ -158,6 +159,7 @@ func TestCounterFoldsNamesPastTheCapUnderOther(t *testing.T) {
 	c.add("workspace", "connection", "pypi.org")
 	c.addLost(3, 3)
 	c.addLost(9, 1)
+	c.addLost(1<<40, 2)
 	out := metricsText(c)
 	for _, want := range []string{
 		`{policy_namespace="workspace",kind="dns",destination="n0.example."} 2`,
@@ -165,7 +167,7 @@ func TestCounterFoldsNamesPastTheCapUnderOther(t *testing.T) {
 		`{policy_namespace="workspace",kind="connection",destination="pypi.org"} 1`,
 		`{policy_namespace="workspace",kind="connection",destination="other"} 0`,
 		`via_maris_egress_lost_events_total{source="HUBBLE_RING_BUFFER"} 3`,
-		`via_maris_egress_lost_events_total{source="9"} 1`,
+		`via_maris_egress_lost_events_total{source="other"} 3`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("metrics lack %s", want)
