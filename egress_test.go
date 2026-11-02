@@ -269,6 +269,9 @@ func TestObserveFlowCountsWhatEnforcementWouldRefuse(t *testing.T) {
 	if err := observeFlow(lostEvents(1, 7), set, c); err != nil {
 		t.Fatal(err)
 	}
+	if err := observeFlow(pbBytes(nil, respLostEvents, pbVarint(nil, lostNumEvents, 4)), set, c); err != nil {
+		t.Fatal(err)
+	}
 	if err := observeFlow([]byte{0xff}, set, c); err == nil {
 		t.Error("a relay message that does not parse was skipped")
 	}
@@ -283,6 +286,7 @@ func TestObserveFlowCountsWhatEnforcementWouldRefuse(t *testing.T) {
 		`{policy_namespace="workspace",kind="connection",destination="pypi.org"} 1`,
 		`{policy_namespace="workspace",kind="connection",destination="151.101.0.223"} 1`,
 		`via_maris_egress_lost_events_total{source="PERF_EVENT_RING_BUFFER"} 7`,
+		`via_maris_egress_lost_events_total{source="UNKNOWN_LOST_EVENT_SOURCE"} 4`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("metrics lack %s:\n%s", want, out)
