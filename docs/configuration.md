@@ -1,6 +1,6 @@
 # Configuring and pointing clients at via-maris
 
-`via-maris` is a single Go program built from the standard library alone. The gateway reads one JSON file, named as its only argument. [`config.example.json`](../config.example.json) carries every field. A configuration with an unknown field or one that fails validation stops the gateway at startup. `via-maris recheck <recheck.json>` runs the re-check instead, as [The re-check](#the-re-check) describes, and `via-maris egress-observe <egress-observe.json>` the egress observer, as [The egress observer](#the-egress-observer) describes.
+`via-maris` is a single Go program built from the standard library alone. The gateway reads one JSON file, named as its only argument. [`config.example.json`](../config.example.json) carries every field. A configuration with an unknown field or one that fails validation stops the gateway at startup. `via-maris recheck <recheck.json>` runs the re-check instead, as [The re-check](#the-re-check) describes, `via-maris egress-observe <egress-observe.json>` the egress observer, as [The egress observer](#the-egress-observer) describes, and `via-maris hold-lag <hold-lag.json> [YYYY-MM]` the monthly hold-lag report, as [The hold-lag report](#the-hold-lag-report) describes.
 
 ```
 go test ./...
@@ -120,3 +120,17 @@ It follows the relay over gRPC on unencrypted HTTP/2 for the policy verdicts and
 `GET /metrics` serves `via_maris_egress_unlisted_total{policy_namespace,kind,destination}` and `via_maris_egress_lost_events_total`, the events the relay reports lost. `policy_namespace` names the namespace a policy covers; it is not `namespace` because a Kubernetes pod scrape sets `namespace` to the observer's own and moves the exported value to `exported_namespace`. Each namespace and kind holds at most 256 destinations; a further one is counted under `destination="other"` and logged. The `other` series exists for every namespace and kind from the start, so each namespace shows before its first event.
 
 The observer exits non-zero when the relay stream ends or sends a message it cannot parse, or when a policy is deleted, cannot be read, or changes to one it refuses, so each shows as the observer down.
+
+## The hold-lag report
+
+`via-maris hold-lag <hold-lag.json> [YYYY-MM]` measures how long one month's malicious versions waited to be listed, against each ecosystem's hold, and exits. With no month it reads the month before the current UTC one, so a scheduler runs it on the first. [`hold-lag.example.json`](../hold-lag.example.json) carries every field.
+
+It reads `advisories.source`, `records`, and the first npm, PyPI and Go upstream from the gateway's own configuration at `gatewayConfig`, so the hold it measures is the one the gateway serves with. The other sections are left unvalidated, so the job holds the records store's key alone. A run:
+
+1. Takes every `MAL-` entry in each ecosystem's OSV export whose `published` falls in the month, and the versions each names. A version two entries name counts once, at the earlier listing.
+2. Dates each version. An npm version is dated by its entry under `time` in the full packument, and a PyPI release by its earliest upload in `/pypi/<project>/json`. A Go version is dated by the first time the module index served it, read from `goWindow` before the month to the month's end. A Go version missing from that window is asked of the proxy's `cached-only` path, which answers without fetching it, and one the proxy holds is dated as first served before the window. A version its registry gives no time for is dated by the earliest `published` in the decision records staged under `records` up to the month's end.
+3. Gives, per ecosystem, the share of dated versions whose lag, from publication to listing, exceeds the hold. It gives the counts it dated and could not, and those published after their listing, which no hold waits out. It gives the shortest whole number of days up to `maxHoldDays` that leaves `target` or less unlisted; for Go the search ends a day short of the window, since a lag older than the window is not known. A month with fewer than `minDated` dated versions is thin and moves nothing, and a thin PyPI month is marked as following npm's.
+4. Logs one line per ecosystem and writes the report as JSON to stdout.
+5. Posts one `ViaMarisHoldLagOutOfBand` alert at severity `ticket` for each ecosystem whose month is not thin and whose share falls outside `low` to `high`, labelled with the ecosystem and month. The alert names the share and the proposed hold, and ends `alertFor` after the run.
+
+The run exits non-zero when a registry answers anything but 200, 404 or 410 three times, when an export or the records store cannot be read, or when an alert cannot be posted, so it never reports a month it could not fully read.

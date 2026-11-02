@@ -28,6 +28,7 @@ type osvRange struct {
 
 type osvEntry struct {
 	ID        string `json:"id"`
+	Published string `json:"published"`
 	Withdrawn string `json:"withdrawn"`
 	Affected  []struct {
 		Package struct {
@@ -138,24 +139,28 @@ func packageKey(eco, name string) string {
 	return name
 }
 
-func (db *advisoryDB) load(ctx context.Context, eco string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, db.source+"/"+eco+"/all.zip", nil)
+func fetchExport(ctx context.Context, client *http.Client, source, eco string) (*zip.Reader, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source+"/"+eco+"/all.zip", nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	resp, err := db.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %s", req.URL, resp.Status)
+		return nil, fmt.Errorf("GET %s: %s", req.URL, resp.Status)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	return zip.NewReader(bytes.NewReader(body), int64(len(body)))
+}
+
+func (db *advisoryDB) load(ctx context.Context, eco string) error {
+	zr, err := fetchExport(ctx, db.client, db.source, eco)
 	if err != nil {
 		return err
 	}

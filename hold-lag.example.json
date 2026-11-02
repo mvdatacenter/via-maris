@@ -1,0 +1,11 @@
+{
+  "gatewayConfig": "/etc/via-maris/via-maris.json",
+  "alertmanager": "http://alertmanager.example:9093",
+  "alertFor": "744h",
+  "target": 0.2,
+  "low": 0.15,
+  "high": 0.25,
+  "minDated": 100,
+  "maxHoldDays": 365,
+  "goWindow": "720h"
+}

@@ -202,19 +202,17 @@ func maliciousListings(db *advisoryDB, pkgs []lockedPackage) []listing {
 	return out
 }
 
+type alertmanagerAlert struct {
+	Labels      map[string]string `json:"labels"`
+	Annotations map[string]string `json:"annotations"`
+	StartsAt    time.Time         `json:"startsAt"`
+	EndsAt      time.Time         `json:"endsAt"`
+}
+
 func postAlerts(ctx context.Context, client *http.Client, alertmanager string, alertFor time.Duration, ls []listing, now time.Time) error {
-	if len(ls) == 0 {
-		return nil
-	}
-	type alert struct {
-		Labels      map[string]string `json:"labels"`
-		Annotations map[string]string `json:"annotations"`
-		StartsAt    time.Time         `json:"startsAt"`
-		EndsAt      time.Time         `json:"endsAt"`
-	}
-	alerts := make([]alert, 0, len(ls))
+	alerts := make([]alertmanagerAlert, 0, len(ls))
 	for _, l := range ls {
-		alerts = append(alerts, alert{
+		alerts = append(alerts, alertmanagerAlert{
 			Labels: map[string]string{
 				"alertname":  "LockedVersionListedMalicious",
 				"severity":   "critical",
@@ -233,6 +231,13 @@ func postAlerts(ctx context.Context, client *http.Client, alertmanager string, a
 			StartsAt: now,
 			EndsAt:   now.Add(alertFor),
 		})
+	}
+	return postAlertmanager(ctx, client, alertmanager, alerts)
+}
+
+func postAlertmanager(ctx context.Context, client *http.Client, alertmanager string, alerts []alertmanagerAlert) error {
+	if len(alerts) == 0 {
+		return nil
 	}
 	body, err := json.Marshal(alerts)
 	if err != nil {

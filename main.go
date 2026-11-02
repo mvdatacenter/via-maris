@@ -259,6 +259,12 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) >= 3 && os.Args[1] == "hold-lag" {
+		if err := holdLagMain(os.Args[2:], client); err != nil {
+			log.Fatalf("hold-lag: %v", err)
+		}
+		return
+	}
 	if len(os.Args) == 3 && os.Args[1] == "egress-observe" {
 		if err := egressObserveMain(os.Args[2]); err != nil {
 			log.Fatalf("egress-observe: %v", err)
@@ -266,7 +272,7 @@ func main() {
 		return
 	}
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: via-maris <config.json>\n       via-maris recheck <recheck.json>\n       via-maris egress-observe <egress-observe.json>")
+		fmt.Fprintln(os.Stderr, "usage: via-maris <config.json>\n       via-maris recheck <recheck.json>\n       via-maris egress-observe <egress-observe.json>\n       via-maris hold-lag <hold-lag.json> [YYYY-MM]")
 		os.Exit(2)
 	}
 	cfg, err := loadConfig(os.Args[1])

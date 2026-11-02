@@ -8,6 +8,8 @@ A version listed as malicious in published advisory data is refused, and so is a
 
 `via-maris egress-observe` counts what a Cilium egress policy not yet enforced would refuse.
 
+`via-maris hold-lag` reports, for one month, the share of malicious versions still unlisted when each ecosystem's hold ended, and alerts when that share leaves its band.
+
 The gateway keeps nothing that cannot be fetched again from upstream. Its behaviour comes entirely from configuration: the list of upstream registries it fronts and the policy applied to each.
 
 The name comes from the Via Maris, the Way of the Sea, the ancient road from Egypt through Galilee to Damascus.
