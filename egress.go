@@ -208,7 +208,7 @@ type unlistedCounter struct {
 	mu     sync.Mutex
 	counts map[egressKey]uint64
 	names  map[[2]string]int
-	lost   uint64
+	lost   [len(lostSources)]uint64
 }
 
 type egressKey struct{ namespace, kind, destination string }
@@ -241,9 +241,12 @@ func (c *unlistedCounter) add(ns, kind, dst string) {
 	c.counts[k]++
 }
 
-func (c *unlistedCounter) addLost(n uint64) {
+// docs/configuration.md, "The egress observer", says what each source means.
+var lostSources = [...]string{"UNKNOWN_LOST_EVENT_SOURCE", "PERF_EVENT_RING_BUFFER", "OBSERVER_EVENTS_QUEUE", "HUBBLE_RING_BUFFER", "other"}
+
+func (c *unlistedCounter) addLost(source, n uint64) {
 	c.mu.Lock()
-	c.lost += n
+	c.lost[min(source, uint64(len(lostSources)-1))] += n
 	c.mu.Unlock()
 }
 
@@ -270,7 +273,9 @@ func (c *unlistedCounter) metrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&buf, "via_maris_egress_unlisted_total{policy_namespace=%q,kind=%q,destination=%q} %d\n", k.namespace, k.kind, k.destination, c.counts[k])
 	}
 	buf.WriteString("# TYPE via_maris_egress_lost_events_total counter\n")
-	fmt.Fprintf(&buf, "via_maris_egress_lost_events_total %d\n", c.lost)
+	for i, src := range lostSources {
+		fmt.Fprintf(&buf, "via_maris_egress_lost_events_total{source=%q} %d\n", src, c.lost[i])
+	}
 	c.mu.Unlock()
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	w.Write(buf.Bytes())
@@ -549,6 +554,7 @@ func (m pbMsg) sub(num int) pbMsg {
 const (
 	respFlow       = 1  // GetFlowsResponse.flow
 	respLostEvents = 3  // GetFlowsResponse.lost_events
+	lostSource     = 1  // LostEvent.source
 	lostNumEvents  = 2  // LostEvent.num_events_lost
 	flowIP         = 5  // Flow.IP
 	ipDestination  = 2  // IP.destination
@@ -573,7 +579,7 @@ func observeFlow(buf []byte, set *policySet, c *unlistedCounter) error {
 		return fmt.Errorf("relay message: %w", err)
 	}
 	if le := top.sub(respLostEvents); len(le) > 0 {
-		c.addLost(le.uint(lostNumEvents))
+		c.addLost(le.uint(lostSource), le.uint(lostNumEvents))
 		return nil
 	}
 	if len(top[respFlow]) == 0 {
