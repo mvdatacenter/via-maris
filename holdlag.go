@@ -464,9 +464,6 @@ type holdLagRun struct {
 func (r *holdLagRun) run(ctx context.Context, month time.Time, now time.Time) (*holdLagReport, error) {
 	from := time.Date(month.Year(), month.Month(), 1, 0, 0, 0, 0, time.UTC)
 	to := from.AddDate(0, 1, 0)
-	// Staging keeps 31 days, so every record it still holds up to the
-	// month's end is read; a removed version whose only record is older is
-	// among those nothing dates.
 	recorded, objects, err := recordedPublished(ctx, r.gw.records, r.gw.prefix, to.AddDate(0, 0, -32), to)
 	if err != nil {
 		return nil, fmt.Errorf("records: %w", err)
