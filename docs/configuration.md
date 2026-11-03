@@ -112,7 +112,7 @@ The `files` upstream must have `held`. The gateway fetches each pinned file into
 
 A JVM ignores `SSL_CERT_FILE` and trusts its own `cacerts`, so the trust store is how Gradle trusts the CA. The Maven `ca` should carry name constraints permitting the Maven names alone.
 
-`TestGradleBuildThroughTheMavenNames` runs the Gradle wrapper and `settings.gradle.kts` of `mvdatacenter/paul-operations` from `testdata/gradle`, unchanged, against the real Maven Central, Google Maven and Gradle distribution host. It needs Docker and the network, so it runs only with `VIA_MARIS_GRADLE_IMAGE` set to the Gradle image to run them in. `VIA_MARIS_GRADLE_HOST` gives the address a container reaches the test at when that is not Docker's `host-gateway`, and the test listens on port 443.
+`TestGradleBuildThroughTheMavenNames` runs an Android build's Gradle wrapper and `settings.gradle.kts` from `testdata/gradle`, as that build commits them, against the real Maven Central, Google Maven and Gradle distribution host. It needs Docker and the network, so it runs only with `VIA_MARIS_GRADLE_IMAGE` set to the Gradle image to run them in. `VIA_MARIS_GRADLE_HOST` gives the address a container reaches the test at when that is not Docker's `host-gateway`, and the test listens on port 443.
 
 ## Operating
 

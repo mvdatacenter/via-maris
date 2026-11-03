@@ -1,7 +1,7 @@
 // Resolves the coordinates -PprobeDeps lists, comma-separated, without their
 // transitive dependencies, through the repositories settings.gradle.kts names,
 // and prints each file it resolved. The settings and the wrapper beside it are
-// mvdatacenter/paul-operations' own, unchanged.
+// an Android build's own, unchanged.
 val probe by configurations.creating { isTransitive = false }
 
 dependencies {
