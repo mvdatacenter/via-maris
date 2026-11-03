@@ -1,6 +1,14 @@
 #!/bin/bash
 # Thin wrapper. Fetches and caches post-checkout.sh from central repo, then runs it.
 
+# Hand-off to the verified shipped copy: docs/runtime-and-delivery-reference.md, "Guard reference" (#9090).
+SHIPPED_WRAPPER=".ai-shared/wrapper-post-checkout.sh"
+if [ -f "$SHIPPED_WRAPPER" ] && ! cmp -s "${BASH_SOURCE[0]}" "$SHIPPED_WRAPPER" \
+    && [ -n "$(cat .ai-shared/.sha-hooks-wrapper-post-checkout.sh 2>/dev/null)" ] \
+    && [ "$(git hash-object "$SHIPPED_WRAPPER" 2>/dev/null)" = "$(cat .ai-shared/.sha-hooks-wrapper-post-checkout.sh)" ]; then
+    exec bash "$SHIPPED_WRAPPER" "$@"
+fi
+
 SCRIPT=".ai-shared/post-checkout.sh"
 RAW="https://raw.githubusercontent.com/mvdatacenter/ai-instructions/main/hooks/post-checkout.sh"
 API="https://api.github.com/repos/mvdatacenter/ai-instructions/contents/hooks/post-checkout.sh?ref=main"

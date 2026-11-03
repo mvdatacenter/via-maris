@@ -1,6 +1,14 @@
 #!/bin/bash
 # Thin wrapper. Fetches and caches pre-commit.sh from central repo, then runs it.
 
+# Hand-off to the verified shipped copy: docs/runtime-and-delivery-reference.md, "Guard reference" (#9090).
+SHIPPED_WRAPPER=".ai-shared/wrapper-pre-commit.sh"
+if [ -f "$SHIPPED_WRAPPER" ] && ! cmp -s "${BASH_SOURCE[0]}" "$SHIPPED_WRAPPER" \
+    && [ -n "$(cat .ai-shared/.sha-hooks-wrapper-pre-commit.sh 2>/dev/null)" ] \
+    && [ "$(git hash-object "$SHIPPED_WRAPPER" 2>/dev/null)" = "$(cat .ai-shared/.sha-hooks-wrapper-pre-commit.sh)" ]; then
+    exec bash "$SHIPPED_WRAPPER" "$@"
+fi
+
 SCRIPT=".ai-shared/pre-commit.sh"
 RAW="https://raw.githubusercontent.com/mvdatacenter/ai-instructions/main/hooks/pre-commit.sh"
 # The API second source: docs/runtime-and-delivery-reference.md, "Guard
