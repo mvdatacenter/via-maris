@@ -21,7 +21,7 @@ func TestExampleConfigLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Upstreams) != 5 || cfg.Upstreams[0].Exceptions[0].Expires.Format("2006-01-02") != "2026-12-01" {
+	if len(cfg.Upstreams) != 8 || cfg.Upstreams[0].Exceptions[0].Expires.Format("2006-01-02") != "2026-12-01" {
 		t.Errorf("loaded %+v", cfg.Upstreams)
 	}
 	if got := newObjectStore(cfg.Records.Store, nil).objectURL("k"); got != "https://account.records.example/via-maris-records/k" {
@@ -32,6 +32,9 @@ func TestExampleConfigLoads(t *testing.T) {
 	}
 	if n := cfg.ByName.NPM; n == nil || n.Upstream != "npm" || strings.Join(n.Hosts, " ") != "registry.npmjs.org registry.yarnpkg.com" {
 		t.Errorf("byName.npm %+v", cfg.ByName.NPM)
+	}
+	if m := cfg.ByName.Maven; m == nil || m.Files != "gradle" || strings.Join(m.Upstreams, " ") != "google central" {
+		t.Errorf("byName.maven %+v", cfg.ByName.Maven)
 	}
 }
 

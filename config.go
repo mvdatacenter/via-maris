@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -69,10 +71,11 @@ type Upstream struct {
 	Advisories  string       `json:"advisories"`
 	Exceptions  []Exception  `json:"exceptions"`
 	Pinned      []PinnedFile `json:"pinned"`
+	Held        string       `json:"held"`
 }
 
 func (u *Upstream) checked() bool {
-	return u.Ecosystem == "npm" || u.Ecosystem == "PyPI" || u.Ecosystem == "Go"
+	return u.Ecosystem == "npm" || u.Ecosystem == "PyPI" || u.Ecosystem == "Go" || u.Ecosystem == "Maven"
 }
 
 type Store struct {
@@ -85,12 +88,13 @@ type Store struct {
 }
 
 type ByName struct {
-	Listen   string     `json:"listen"`
-	Upstream string     `json:"upstream"`
-	Cert     string     `json:"cert"`
-	Key      string     `json:"key"`
-	CA       string     `json:"ca"`
-	NPM      *NPMByName `json:"npm"`
+	Listen   string       `json:"listen"`
+	Upstream string       `json:"upstream"`
+	Cert     string       `json:"cert"`
+	Key      string       `json:"key"`
+	CA       string       `json:"ca"`
+	NPM      *NPMByName   `json:"npm"`
+	Maven    *MavenByName `json:"maven"`
 }
 
 type NPMByName struct {
@@ -99,6 +103,15 @@ type NPMByName struct {
 	Cert     string   `json:"cert"`
 	Key      string   `json:"key"`
 	CA       string   `json:"ca"`
+}
+
+type MavenByName struct {
+	Upstreams []string `json:"upstreams"`
+	Files     string   `json:"files"`
+	Listings  []string `json:"listings"`
+	Cert      string   `json:"cert"`
+	Key       string   `json:"key"`
+	CA        string   `json:"ca"`
 }
 
 type Config struct {
@@ -228,12 +241,130 @@ func (b *ByName) validate(c *Config) error {
 		if index.Hostname() == files.Hostname() {
 			return fmt.Errorf("byName.upstream %s serves its index and files from one host, so its requests cannot be told apart by name", b.Upstream)
 		}
+		taken := []string{index.Hostname(), files.Hostname()}
 		if b.NPM != nil {
-			return b.NPM.validate(c, index.Hostname(), files.Hostname())
+			if err := b.NPM.validate(c, taken...); err != nil {
+				return err
+			}
+			taken = append(taken, b.NPM.Hosts...)
+		}
+		if b.Maven != nil {
+			return b.Maven.validate(c, taken)
 		}
 		return nil
 	}
 	return fmt.Errorf("byName.upstream %q names no upstream", b.Upstream)
+}
+
+type mavenRoot struct {
+	host, path string
+}
+
+func splitRoot(s string) (mavenRoot, bool) {
+	u, err := url.Parse(s)
+	if err != nil || !httpURL(s) || u.RawQuery != "" || u.Fragment != "" {
+		return mavenRoot{}, false
+	}
+	return mavenRoot{u.Hostname(), u.EscapedPath()}, true
+}
+
+func (r mavenRoot) contains(o mavenRoot) bool {
+	return r.host == o.host && strings.HasPrefix(o.path+"/", r.path+"/")
+}
+
+func upstreamIn(c *Config, name string) *Upstream {
+	for i := range c.Upstreams {
+		if c.Upstreams[i].Name == name {
+			return &c.Upstreams[i]
+		}
+	}
+	return nil
+}
+
+func (m *MavenByName) hosts(c *Config) []string {
+	var urls []string
+	for _, name := range m.Upstreams {
+		if up := upstreamIn(c, name); up != nil {
+			urls = append(urls, up.URL)
+		}
+	}
+	urls = append(urls, m.Listings...)
+	if files := upstreamIn(c, m.Files); files != nil {
+		for _, f := range files.Pinned {
+			urls = append(urls, f.URL)
+		}
+	}
+	var out []string
+	for _, s := range urls {
+		if r, ok := splitRoot(s); ok && !slices.Contains(out, r.host) {
+			out = append(out, r.host)
+		}
+	}
+	return out
+}
+
+func (m *MavenByName) validate(c *Config, taken []string) error {
+	if m.Cert == "" || m.Key == "" || m.CA == "" {
+		return errors.New("byName.maven needs cert, key and ca files")
+	}
+	if len(m.Upstreams) == 0 {
+		return errors.New("byName.maven.upstreams is empty")
+	}
+	var repos, listings []mavenRoot
+	for i, name := range m.Upstreams {
+		up := upstreamIn(c, name)
+		switch {
+		case up == nil:
+			return fmt.Errorf("byName.maven.upstreams entry %q names no upstream", name)
+		case up.Ecosystem != "Maven":
+			return fmt.Errorf("byName.maven.upstreams entry %s is not a Maven upstream", name)
+		case slices.Contains(m.Upstreams[:i], name):
+			return fmt.Errorf("byName.maven.upstreams entry %s is repeated", name)
+		}
+		r, ok := splitRoot(up.URL)
+		if !ok || r.path == "" {
+			return fmt.Errorf("byName.maven: upstream %s url %q has a query or fragment, or no path", name, up.URL)
+		}
+		repos = append(repos, r)
+	}
+	for _, l := range m.Listings {
+		r, ok := splitRoot(l)
+		if !ok || r.path == "" {
+			return fmt.Errorf("byName.maven: listing %q is not an http(s) URL with a path and no trailing slash, query or fragment", l)
+		}
+		listings = append(listings, r)
+	}
+	all := append(slices.Clone(repos), listings...)
+	for i, a := range all {
+		for _, b := range all[:i] {
+			if a.contains(b) || b.contains(a) {
+				return fmt.Errorf("byName.maven: %s%s and %s%s overlap", a.host, a.path, b.host, b.path)
+			}
+		}
+	}
+	if m.Files != "" {
+		files := upstreamIn(c, m.Files)
+		if files == nil || files.Ecosystem != "files" || files.Held == "" {
+			return fmt.Errorf("byName.maven.files %q names no files upstream that holds its files", m.Files)
+		}
+		for _, f := range files.Pinned {
+			r, ok := splitRoot(f.URL)
+			if !ok {
+				return fmt.Errorf("byName.maven: file %s url %q has a query or fragment", f.Name, f.URL)
+			}
+			for _, repo := range repos {
+				if repo.contains(r) {
+					return fmt.Errorf("byName.maven: file %s lies in a Maven repository, which serves it as an artifact", f.Name)
+				}
+			}
+		}
+	}
+	for _, h := range m.hosts(c) {
+		if slices.Contains(taken, h) {
+			return fmt.Errorf("byName.maven serves %s, which is already a PyPI or npm name", h)
+		}
+	}
+	return nil
 }
 
 func (n *NPMByName) validate(c *Config, pypiHosts ...string) error {
@@ -284,6 +415,9 @@ func (u *Upstream) validate(seen map[string]bool) error {
 		if u.URL != "" || u.Hold.Duration != 0 || u.Advisories != "" || len(u.Exceptions) > 0 {
 			return fmt.Errorf("%s: a files upstream takes pinned files alone", where)
 		}
+		if u.Held != "" && !filepath.IsAbs(u.Held) {
+			return fmt.Errorf("%s: held must be an absolute directory", where)
+		}
 		if len(u.Pinned) == 0 {
 			return fmt.Errorf("%s pins no files", where)
 		}
@@ -303,7 +437,10 @@ func (u *Upstream) validate(seen map[string]bool) error {
 		return nil
 	}
 	if u.Ecosystem != "apt" && !u.checked() {
-		return fmt.Errorf("%s: ecosystem %q is not npm, PyPI, Go, apt or files", where, u.Ecosystem)
+		return fmt.Errorf("%s: ecosystem %q is not npm, PyPI, Go, Maven, apt or files", where, u.Ecosystem)
+	}
+	if u.Held != "" {
+		return fmt.Errorf("%s: only a files upstream holds files", where)
 	}
 	if err := needURL("url", u.URL); err != nil {
 		return err
