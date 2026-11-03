@@ -25,6 +25,8 @@ type gateway struct {
 	inUse      *inUseSet
 	records    *recorder
 	goIdx      map[string]*goIndex
+	held       map[string]*heldFiles
+	poms       *pomDates
 	ecosystems []string
 	byName     *byName
 }
@@ -46,6 +48,8 @@ func newGateway(cfg *Config, client *http.Client, recordLog io.Writer) (*gateway
 			host:   host,
 		},
 		goIdx: map[string]*goIndex{},
+		held:  map[string]*heldFiles{},
+		poms:  &pomDates{at: map[string]time.Time{}},
 	}
 	seen := map[string]bool{}
 	for i := range cfg.Upstreams {
@@ -56,6 +60,9 @@ func newGateway(cfg *Config, client *http.Client, recordLog io.Writer) (*gateway
 		}
 		if up.Ecosystem == "Go" {
 			g.goIdx[up.Name] = newGoIndex(up, client)
+		}
+		if up.Held != "" {
+			g.held[up.Name] = newHeldFiles(g, up)
 		}
 	}
 	sort.Strings(g.ecosystems)
@@ -75,6 +82,8 @@ func (g *gateway) handler() http.Handler {
 			h = func(w http.ResponseWriter, r *http.Request) { g.npm(w, r, up) }
 		case "PyPI":
 			h = func(w http.ResponseWriter, r *http.Request) { g.pypi(w, r, up) }
+		case "Maven":
+			h = func(w http.ResponseWriter, r *http.Request) { g.maven(w, r, up) }
 		case "Go":
 			ix := g.goIdx[up.Name]
 			h = func(w http.ResponseWriter, r *http.Request) { g.gomod(w, r, up, ix) }
@@ -148,6 +157,11 @@ func (g *gateway) notReady() []string {
 				out = append(out, "npm tls certificate")
 			}
 		}
+		if g.byName.maven != nil {
+			if _, err := g.byName.maven.certs.current(); err != nil {
+				out = append(out, "maven tls certificate")
+			}
+		}
 	}
 	sort.Strings(out)
 	return out
@@ -195,6 +209,14 @@ func (g *gateway) metrics(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "via_maris_tls_expiry_timestamp_seconds{certificate=\"npm-leaf\"} %d\n", unixOrZero(leaf))
 			fmt.Fprintf(w, "via_maris_tls_expiry_timestamp_seconds{certificate=\"npm-ca\"} %d\n", unixOrZero(ca))
 		}
+		if g.byName.maven != nil {
+			leaf, ca := g.byName.maven.certs.expiry()
+			fmt.Fprintf(w, "via_maris_tls_expiry_timestamp_seconds{certificate=\"maven-leaf\"} %d\n", unixOrZero(leaf))
+			fmt.Fprintf(w, "via_maris_tls_expiry_timestamp_seconds{certificate=\"maven-ca\"} %d\n", unixOrZero(ca))
+		}
+	}
+	for name, h := range g.held {
+		fmt.Fprintf(w, "via_maris_pinned_unheld{upstream=%q} %d\n", name, h.unheld())
 	}
 }
 
@@ -243,6 +265,9 @@ func (g *gateway) start(ctx context.Context) {
 	})
 	for name, ix := range g.goIdx {
 		go ix.run(ctx, name)
+	}
+	for _, h := range g.held {
+		go h.run(ctx)
 	}
 }
 
@@ -299,6 +324,11 @@ func main() {
 		if g.byName.npm != nil {
 			if _, err := g.byName.npm.certs.current(); err != nil {
 				log.Printf("npm tls certificate: %v; the npm names refuse handshakes until it loads", err)
+			}
+		}
+		if g.byName.maven != nil {
+			if _, err := g.byName.maven.certs.current(); err != nil {
+				log.Printf("maven tls certificate: %v; the Maven names refuse handshakes until it loads", err)
 			}
 		}
 		ln, err := net.Listen("tcp", cfg.ByName.Listen)

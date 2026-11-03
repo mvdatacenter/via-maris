@@ -27,6 +27,7 @@ type byName struct {
 	indexPath, filesPath string
 	certs                *certFiles
 	npm                  *npmByName
+	maven                *mavenByName
 	pypiH                http.HandlerFunc
 	tunnels              *tunnelListener
 	srv                  *http.Server
@@ -74,6 +75,9 @@ func newByName(g *gateway, cfg *ByName) *byName {
 		})
 		b.npm = n
 	}
+	if cfg.Maven != nil {
+		b.maven = newMavenByName(g, cfg.Maven)
+	}
 	b.srv = &http.Server{
 		Handler:           http.HandlerFunc(b.serve),
 		ReadHeaderTimeout: 30 * time.Second,
@@ -87,6 +91,9 @@ func (b *byName) names() []string {
 	names := []string{b.indexHost, b.filesHost}
 	if b.npm != nil {
 		names = append(names, b.npm.hosts...)
+	}
+	if b.maven != nil {
+		names = append(names, b.maven.hosts...)
 	}
 	return names
 }
@@ -103,6 +110,10 @@ func (b *byName) npmHost(host string) bool {
 	return false
 }
 
+func (b *byName) mavenHost(host string) bool {
+	return b.maven != nil && b.maven.serves(host)
+}
+
 func joinAnd(names []string) string {
 	if len(names) < 2 {
 		return strings.Join(names, "")
@@ -116,6 +127,8 @@ func (b *byName) certificate(hello *tls.ClientHelloInfo) (*tls.Certificate, erro
 		return b.certs.current()
 	case b.npmHost(hello.ServerName):
 		return b.npm.certs.current()
+	case b.mavenHost(hello.ServerName):
+		return b.maven.certs.current()
 	}
 	return nil, fmt.Errorf("via-maris answers TLS for %s alone, not %q", joinAnd(b.names()), hello.ServerName)
 }
@@ -134,6 +147,10 @@ func (b *byName) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if b.npmHost(host) {
 		b.npm.h(w, r)
+		return
+	}
+	if b.mavenHost(host) {
+		b.maven.h(w, r)
 		return
 	}
 	b.pypiH(w, r)
@@ -190,7 +207,10 @@ func (b *byName) connect(w http.ResponseWriter, r *http.Request) {
 	if b.npmHost(host) {
 		up = b.npm.up
 	}
-	if err != nil || port != "443" || host != b.indexHost && host != b.filesHost && !b.npmHost(host) {
+	if b.mavenHost(host) {
+		up = b.maven.recordAs
+	}
+	if err != nil || port != "443" || host != b.indexHost && host != b.filesHost && !b.npmHost(host) && !b.mavenHost(host) {
 		var allowed []string
 		for _, n := range b.names() {
 			allowed = append(allowed, n+":443")

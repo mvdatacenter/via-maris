@@ -81,6 +81,32 @@
           "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
         }
       ]
+    },
+    {
+      "name": "central",
+      "ecosystem": "Maven",
+      "url": "https://repo.maven.apache.org/maven2",
+      "hold": "720h",
+      "advisories": "malicious"
+    },
+    {
+      "name": "google",
+      "ecosystem": "Maven",
+      "url": "https://dl.google.com/dl/android/maven2",
+      "hold": "720h",
+      "advisories": "malicious"
+    },
+    {
+      "name": "gradle",
+      "ecosystem": "files",
+      "held": "/var/lib/via-maris/held",
+      "pinned": [
+        {
+          "name": "gradle-9.8.0-bin.zip",
+          "url": "https://services.gradle.org/distributions/gradle-9.8.0-bin.zip",
+          "sha256": "bafd5ce9cfaea0fbccfdc8439a1ac42fbd4cd9c89dc9a988228d8a2639a58e6c"
+        }
+      ]
     }
   ],
   "byName": {
@@ -95,6 +121,14 @@
       "cert": "/etc/via-maris/npm-tls/tls.crt",
       "key": "/etc/via-maris/npm-tls/tls.key",
       "ca": "/etc/via-maris/npm-tls/ca.crt"
+    },
+    "maven": {
+      "upstreams": ["google", "central"],
+      "files": "gradle",
+      "listings": ["https://dl.google.com/android/repository"],
+      "cert": "/etc/via-maris/maven-tls/tls.crt",
+      "key": "/etc/via-maris/maven-tls/tls.key",
+      "ca": "/etc/via-maris/maven-tls/ca.crt"
     }
   }
 }
