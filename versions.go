@@ -7,6 +7,9 @@ import (
 )
 
 func compareVersions(eco, a, b string) (int, bool) {
+	if eco == "Maven" {
+		return compareMaven(parseMaven(a), parseMaven(b)), true
+	}
 	if eco == "PyPI" {
 		pa, oka := parsePEP440(a)
 		pb, okb := parsePEP440(b)

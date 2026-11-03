@@ -23,7 +23,7 @@ cosign verify ghcr.io/mvdatacenter/via-maris:<tag> \
 - `inUse`: an object in an S3-compatible store that lists the versions already in use, shaped `{"generated": "<RFC 3339>", "ecosystems": {"npm": {"<package>": ["<version>"]}}}`. The re-check writes it. A version inside the hold is served when it fixes an advisory against a version in that list. `maxAge` bounds how stale the object may be.
 - `records`: where decision records are uploaded, as NDJSON batches under `prefix`. A record is written to stdout for every decision. A record of a version whose publication time the check read carries that time as `published`, so it stays known after the upstream removes the version. For a Go module that time is when the module proxy first served the version, which the gateway reads from the Go index for the last hold and an hour, so a Go version first served before then carries none. Once the oldest unshipped record is older than `maxUnshipped`, every request is answered 503.
 - `upstreams`: one entry per registry fronted, served under `/<name>/`.
-- `byName` (optional): serves one PyPI upstream under the host names of its `url` and `files`, as [PyPI by its own names](#pypi-by-its-own-names) describes. `listen` is the TLS listener's address, `upstream` names the PyPI upstream, and `cert`, `key` and `ca` are the files holding the leaf certificate, its key and the CA certificate that signed it. `npm` (optional) serves one npm upstream on the same listener, as [npm by its own names](#npm-by-its-own-names) describes: `upstream` names it, `hosts` lists the names it answers, and `cert`, `key` and `ca` are its own.
+- `byName` (optional): serves one PyPI upstream under the host names of its `url` and `files`, as [PyPI by its own names](#pypi-by-its-own-names) describes. `listen` is the TLS listener's address, `upstream` names the PyPI upstream, and `cert`, `key` and `ca` are the files holding the leaf certificate, its key and the CA certificate that signed it. `npm` (optional) serves one npm upstream on the same listener, as [npm by its own names](#npm-by-its-own-names) describes: `upstream` names it, `hosts` lists the names it answers, and `cert`, `key` and `ca` are its own. `maven` (optional) serves Maven upstreams, SDK listings and held pinned files on the same listener, as [Maven and pinned files by their own names](#maven-and-pinned-files-by-their-own-names) describes.
 
 The access keys for both stores are read from the environment variables the store names. A store's endpoint is given either as `endpoint` or, when it carries a value kept out of the configuration such as an account id, as `endpointEnv`, the environment variable that holds it.
 
@@ -31,6 +31,7 @@ The access keys for both stores are read from the environment variables the stor
 
 - `hold`: the release-age hold. A version published more recently than this is refused.
 - `advisories`: `malicious` refuses versions that a `MAL-` advisory lists. `all` refuses a version that any advisory lists.
+- `held` (files upstreams alone): a directory the gateway fetches and verifies each pinned file into when it starts, and serves it from, as [Maven and pinned files by their own names](#maven-and-pinned-files-by-their-own-names) describes. Without it, a pinned file is fetched and verified on each request.
 - `exceptions`: admit one version through the hold. Each exception names the package, version, a reason, the review that approved it, and an `expires` date. It applies only until that date, and to the hold alone: the advisory check still refuses a malicious version.
 
 ## Clients
@@ -42,12 +43,13 @@ With the gateway at `http://via-maris:8480` and the upstream names from the exam
 | npm | `registry=http://via-maris:8480/npm/` |
 | pip, uv | `index-url = http://via-maris:8480/pypi/simple/` |
 | go | `GOPROXY=http://via-maris:8480/go` (the go command reaches the checksum database through the same proxy) |
+| Maven, Gradle | `http://via-maris:8480/central` as the repository URL |
 | apt | `deb http://via-maris:8480/apt/ubuntu <suite> main` |
 | files | `http://via-maris:8480/files/<pinned name>` |
 
 The checks differ by front end:
 
-- **npm, PyPI and Go** are checked one version at a time.
+- **npm, PyPI, Go and Maven** are checked one version at a time.
 - **apt** is served from a dated archive snapshot taken one hold back.
 - **files** serves only names that are pinned to a SHA-256 digest.
 
@@ -86,10 +88,36 @@ npm and yarn lockfiles record each tarball's full URL, and yarn 1 fetches that U
 
 The npm `ca` should carry name constraints permitting the npm hosts alone, so a key that leaks signs nothing but them.
 
+## Maven and pinned files by their own names
+
+A Gradle build names its repositories and its wrapper's distribution by URL, in `settings.gradle.kts` and `gradle-wrapper.properties`, files it shares with every machine that builds it. `byName.maven` lets those builds reach the check with both files unchanged. It answers TLS for the host of each Maven upstream in `upstreams`, of each URL in `listings`, and of each pinned file of the `files` upstream, with its own `cert`, `key` and `ca`. Those names are reached through a host entry or through `CONNECT`, as the PyPI names are. A path is served by the first of these that matches it:
+
+- **A path under a Maven upstream's `url`** is checked as the `/<name>/` path is. Each request is checked as the package `<group>:<artifact>`, OSV's name for it, at the version its directory names.
+  - `maven-metadata.xml` lists only the versions that are served, because Maven metadata has no field for a reason. `<latest>` and `<release>` naming a refused version move to the newest served version, and the `.md5`, `.sha1`, `.sha256` and `.sha512` files beside it are computed over the rewritten bytes.
+  - Every other file in a version's directory is checked as that version, and a file whose name does not start with `<artifact>-<version>` is refused.
+  - A version is dated by the `Last-Modified` of its `.pom`, read once with a `HEAD` and kept in memory. A `.pom` that gives no time is refused.
+  - A version the upstream lacks is answered with the upstream's 404, so the build tries its next repository. A 403 would end the build's search.
+  - Versions are compared in Maven's own ordering, the one OSV writes its Maven ranges in.
+- **A pinned file's own URL path**, on its own host, is served from the `files` upstream's `held` directory. Every other path on that host is refused.
+- **An `.xml` file under a `listings` URL** is served as fetched. An Android SDK listing names each package archive with the SHA-1 that `sdkmanager` and the Android Gradle Plugin verify, and it carries no code. Every other file under it is served only when it is pinned.
+
+Every other path on these names is refused with 403, naming it. Gradle prints the status line's reason phrase and not the body, so the listener, which speaks HTTP/1.1 alone, writes each refusal as the reason phrase as well as the body: `Received status code 403 from server: via-maris refused org.jetbrains.kotlin:kotlin-stdlib@2.4.21: published 2026-10-08T07:57:54Z, inside the 720h0m0s release-age hold until 2026-11-07T07:57:54Z`.
+
+The `files` upstream must have `held`. The gateway fetches each pinned file into that directory when it starts, following redirects, and keeps it only when its bytes hash to the pin, so a client never waits on the upstream. A file not held yet is refused, naming its last fetch's error, and the fetch is retried every minute. Once every pinned file is held, the files the configuration no longer pins are removed from the directory. A file already in the directory from an earlier start is kept when it hashes to its pin. The directory holds only what can be fetched again, so an `emptyDir` volume is enough. Its size limit should allow twice the pinned files' total size, because a changed pin is fetched in full before the file it replaces is removed.
+
+| Client | Setting |
+| --- | --- |
+| Gradle on a workstation | `systemProp.https.proxyHost=localhost`, `systemProp.https.proxyPort=<port of the main listener>`, `systemProp.javax.net.ssl.trustStore=<a copy of the JDK's cacerts with the CA imported>` and `systemProp.javax.net.ssl.trustStorePassword` in `~/.gradle/gradle.properties` |
+| a pod or runner whose `hostAliases` map the names | the trust store lines alone |
+
+A JVM ignores `SSL_CERT_FILE` and trusts its own `cacerts`, so the trust store is how Gradle trusts the CA. The Maven `ca` should carry name constraints permitting the Maven names alone.
+
+`TestGradleBuildThroughTheMavenNames` runs the Gradle wrapper and `settings.gradle.kts` of `mvdatacenter/paul-operations` from `testdata/gradle`, unchanged, against the real Maven Central, Google Maven and Gradle distribution host. It needs Docker and the network, so it runs only with `VIA_MARIS_GRADLE_IMAGE` set to the Gradle image to run them in. `VIA_MARIS_GRADLE_HOST` gives the address a container reaches the test at when that is not Docker's `host-gateway`, and the test listens on port 443.
+
 ## Operating
 
-- `GET /healthz` answers 503 and names what is not ready: an ecosystem's advisory data, a Go index, the record upload, or with `byName` the TLS certificate and, with `byName.npm`, the npm TLS certificate. A stale in-use set only stops fix releases from passing the hold, so the gateway stays ready.
-- `GET /metrics` serves Prometheus text. With `byName`, `via_maris_tls_expiry_timestamp_seconds` gives the leaf's and the CA's expiry as Unix time, labelled `certificate="leaf"` and `certificate="ca"` (and `certificate="npm-leaf"` and `certificate="npm-ca"` with `byName.npm`), and 0 before a pair has loaded.
+- `GET /healthz` answers 503 and names what is not ready: an ecosystem's advisory data, a Go index, the record upload, or with `byName` the TLS certificate and, with `byName.npm` or `byName.maven`, the npm or Maven TLS certificate. A pinned file not yet held does not make the gateway unready, because its upstream can be down while every other front end serves. A stale in-use set only stops fix releases from passing the hold, so the gateway stays ready.
+- `GET /metrics` serves Prometheus text. With `byName`, `via_maris_tls_expiry_timestamp_seconds` gives the leaf's and the CA's expiry as Unix time, labelled `certificate="leaf"` and `certificate="ca"` (and `certificate="npm-leaf"` and `certificate="npm-ca"` with `byName.npm`, and `certificate="maven-leaf"` and `certificate="maven-ca"` with `byName.maven`), and 0 before a pair has loaded. `via_maris_pinned_unheld` counts, for each files upstream with `held`, the pinned files not yet held.
 
 A refused version is answered 403, with the refusal reason in the response.
 
