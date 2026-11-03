@@ -82,8 +82,9 @@ const heldFetchTimeout = 15 * time.Minute
 
 // heldFiles is the held directory docs/configuration.md describes under
 // "Maven and pinned files by their own names". A file fetched on request
-// reaches the client only after its last byte, past a Gradle wrapper's
-// 10-second network timeout on a 137 MB distribution.
+// reaches the client only after its last byte, which for a Gradle
+// distribution comes after the networkTimeout=10000 that
+// testdata/gradle/gradle/wrapper/gradle-wrapper.properties sets.
 type heldFiles struct {
 	g   *gateway
 	up  *Upstream
