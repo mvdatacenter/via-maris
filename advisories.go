@@ -28,6 +28,7 @@ type osvRange struct {
 
 type osvEntry struct {
 	ID        string `json:"id"`
+	Published string `json:"published"`
 	Withdrawn string `json:"withdrawn"`
 	Affected  []struct {
 		Package struct {
@@ -138,12 +139,12 @@ func packageKey(eco, name string) string {
 	return name
 }
 
-func (db *advisoryDB) load(ctx context.Context, eco string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, db.source+"/"+eco+"/all.zip", nil)
+func readExport(ctx context.Context, client *http.Client, source, eco string, fn func(*osvEntry)) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source+"/"+eco+"/all.zip", nil)
 	if err != nil {
 		return err
 	}
-	resp, err := db.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -159,7 +160,6 @@ func (db *advisoryDB) load(ctx context.Context, eco string) error {
 	if err != nil {
 		return err
 	}
-	data := &ecosystemData{byPackage: map[string][]*advisory{}}
 	for _, f := range zr.File {
 		rc, err := f.Open()
 		if err != nil {
@@ -171,9 +171,16 @@ func (db *advisoryDB) load(ctx context.Context, eco string) error {
 		if err != nil {
 			return fmt.Errorf("%s: %w", f.Name, err)
 		}
-		if e.Withdrawn != "" {
-			continue
+		if e.Withdrawn == "" {
+			fn(&e)
 		}
+	}
+	return nil
+}
+
+func (db *advisoryDB) load(ctx context.Context, eco string) error {
+	data := &ecosystemData{byPackage: map[string][]*advisory{}}
+	err := readExport(ctx, db.client, db.source, eco, func(e *osvEntry) {
 		data.entries++
 		mal := strings.HasPrefix(e.ID, "MAL-")
 		if mal {
@@ -190,6 +197,9 @@ func (db *advisoryDB) load(ctx context.Context, eco string) error {
 			k := packageKey(eco, a.Package.Name)
 			data.byPackage[k] = append(data.byPackage[k], adv)
 		}
+	})
+	if err != nil {
+		return err
 	}
 	data.loaded = time.Now()
 	db.mu.Lock()

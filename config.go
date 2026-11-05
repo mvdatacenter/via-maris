@@ -142,16 +142,23 @@ var (
 	hexDigest    = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
-func loadConfig(path string) (*Config, error) {
+func decodeStrict(path string, v any) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var c Config
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&c); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+	if err := dec.Decode(v); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	return nil
+}
+
+func loadConfig(path string) (*Config, error) {
+	var c Config
+	if err := decodeStrict(path, &c); err != nil {
+		return nil, err
 	}
 	if err := c.validate(); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)

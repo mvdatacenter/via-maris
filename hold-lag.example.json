@@ -1,0 +1,6 @@
+{
+  "gateway": "config.example.json",
+  "goWindow": "1440h",
+  "alertmanager": "http://alertmanager.example:9093",
+  "alertFor": "768h"
+}

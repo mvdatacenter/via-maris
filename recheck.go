@@ -47,15 +47,9 @@ type RecheckConfig struct {
 }
 
 func loadRecheckConfig(path string) (*RecheckConfig, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
 	var c RecheckConfig
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&c); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+	if err := decodeStrict(path, &c); err != nil {
+		return nil, err
 	}
 	if err := c.validate(); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
@@ -202,19 +196,17 @@ func maliciousListings(db *advisoryDB, pkgs []lockedPackage) []listing {
 	return out
 }
 
+type amAlert struct {
+	Labels      map[string]string `json:"labels"`
+	Annotations map[string]string `json:"annotations"`
+	StartsAt    time.Time         `json:"startsAt"`
+	EndsAt      time.Time         `json:"endsAt"`
+}
+
 func postAlerts(ctx context.Context, client *http.Client, alertmanager string, alertFor time.Duration, ls []listing, now time.Time) error {
-	if len(ls) == 0 {
-		return nil
-	}
-	type alert struct {
-		Labels      map[string]string `json:"labels"`
-		Annotations map[string]string `json:"annotations"`
-		StartsAt    time.Time         `json:"startsAt"`
-		EndsAt      time.Time         `json:"endsAt"`
-	}
-	alerts := make([]alert, 0, len(ls))
+	alerts := make([]amAlert, 0, len(ls))
 	for _, l := range ls {
-		alerts = append(alerts, alert{
+		alerts = append(alerts, amAlert{
 			Labels: map[string]string{
 				"alertname":  "LockedVersionListedMalicious",
 				"severity":   "critical",
@@ -233,6 +225,13 @@ func postAlerts(ctx context.Context, client *http.Client, alertmanager string, a
 			StartsAt: now,
 			EndsAt:   now.Add(alertFor),
 		})
+	}
+	return sendAlerts(ctx, client, alertmanager, alerts)
+}
+
+func sendAlerts(ctx context.Context, client *http.Client, alertmanager string, alerts []amAlert) error {
+	if len(alerts) == 0 {
+		return nil
 	}
 	body, err := json.Marshal(alerts)
 	if err != nil {

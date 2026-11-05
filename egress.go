@@ -43,15 +43,9 @@ type PolicyRef struct {
 }
 
 func loadEgressConfig(path string) (*EgressConfig, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
 	var c EgressConfig
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&c); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+	if err := decodeStrict(path, &c); err != nil {
+		return nil, err
 	}
 	if c.Listen == "" || c.Relay == "" {
 		return nil, fmt.Errorf("%s: listen and relay are required", path)
