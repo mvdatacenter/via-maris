@@ -33,6 +33,7 @@ type goIndex struct {
 	last   time.Time // the newest timestamp read
 	polled time.Time // the last poll that read the index to its head
 	loaded bool      // the window has been read to the index head once
+	want   map[string]bool
 }
 
 func newGoIndex(up *Upstream, client *http.Client) *goIndex {
@@ -110,7 +111,7 @@ func (ix *goIndex) read(ctx context.Context) error {
 			}
 			n++
 			k := e.Path + "@" + e.Version
-			if t, ok := ix.seen[k]; !ok || e.Timestamp.Before(t) {
+			if t, ok := ix.seen[k]; (!ok || e.Timestamp.Before(t)) && (ix.want == nil || ix.want[k]) {
 				ix.seen[k] = e.Timestamp
 			}
 			if e.Timestamp.After(ix.last) {
