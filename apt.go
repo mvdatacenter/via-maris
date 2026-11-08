@@ -20,7 +20,17 @@ func aptSnapshot(now time.Time, hold time.Duration) string {
 // The archive's own signatures stand in for its publisher, so no file is
 // checked further.
 func (g *gateway) apt(w http.ResponseWriter, r *http.Request, up *Upstream) {
-	rest := strings.TrimPrefix(r.URL.Path, "/"+up.Name+"/")
+	g.aptPath(w, r, up, strings.TrimPrefix(r.URL.Path, "/"+up.Name+"/"))
+}
+
+// aptByHost serves a request that named one of the upstream's hosts, such as
+// archive.ubuntu.com, so its path starts at the archive, as the base image's
+// own apt sources write it.
+func (g *gateway) aptByHost(w http.ResponseWriter, r *http.Request, up *Upstream) {
+	g.aptPath(w, r, up, strings.TrimPrefix(r.URL.Path, "/"))
+}
+
+func (g *gateway) aptPath(w http.ResponseWriter, r *http.Request, up *Upstream, rest string) {
 	archive, p, _ := strings.Cut(rest, "/")
 	if !aptArchive.MatchString(archive) || path.Clean("/"+p) != "/"+p || !(strings.HasPrefix(p, "dists/") || strings.HasPrefix(p, "pool/")) {
 		http.NotFound(w, r)

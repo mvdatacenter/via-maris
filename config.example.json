@@ -69,7 +69,8 @@
       "name": "apt",
       "ecosystem": "apt",
       "url": "https://snapshot.ubuntu.com",
-      "hold": "168h"
+      "hold": "168h",
+      "hosts": ["archive.ubuntu.com", "security.ubuntu.com"]
     },
     {
       "name": "files",

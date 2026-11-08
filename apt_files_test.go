@@ -51,6 +51,59 @@ func TestAptServesTheArchiveFromTheSnapshotOneHoldAgo(t *testing.T) {
 	}
 }
 
+func TestAptServesItsHostsByNameOnTheMainListener(t *testing.T) {
+	var asked []string
+	snapshot := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.Path)
+		w.Write([]byte("release"))
+	}))
+	t.Cleanup(snapshot.Close)
+	env := newTestEnv(t, Upstream{Name: "apt", Ecosystem: "apt", URL: snapshot.URL, Hold: Duration{7 * day}, Hosts: []string{"archive.ubuntu.com", "security.ubuntu.com"}})
+
+	getAs := func(host, p string) int {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, env.srv.URL+p, nil)
+		req.Host = host
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	// A base image's sources name the host and start the path at the archive.
+	before := aptSnapshot(time.Now(), 7*day)
+	for _, host := range []string{"archive.ubuntu.com", "Security.Ubuntu.Com:80"} {
+		asked = nil
+		if status := getAs(host, "/ubuntu/dists/noble-security/InRelease"); status != http.StatusOK {
+			t.Fatalf("%s: %d", host, status)
+		}
+		after := aptSnapshot(time.Now(), 7*day)
+		const file = "/dists/noble-security/InRelease"
+		if len(asked) != 1 || (asked[0] != "/ubuntu/"+before+file && asked[0] != "/ubuntu/"+after+file) {
+			t.Errorf("%s asked %v, want the snapshot %s or %s", host, asked, before, after)
+		}
+	}
+	if rec := env.lastRecord(); rec.Upstream != "apt" || rec.Kind != "metadata" || !rec.Served {
+		t.Errorf("record %+v", rec)
+	}
+
+	// The same paths are refused by name as under /apt/, and a request
+	// naming any other host still reaches the upstream paths.
+	for _, p := range []string{"/ubuntu/etc/passwd", "/ubuntu/dists/../../x", "/apt/ubuntu/dists/noble/InRelease", "/healthz"} {
+		if status := getAs("archive.ubuntu.com", p); status != http.StatusNotFound && status != http.StatusMovedPermanently {
+			t.Errorf("archive.ubuntu.com%s: %d", p, status)
+		}
+	}
+	if status := getAs("via-maris.via-maris.svc:8480", "/apt/ubuntu/dists/noble/InRelease"); status != http.StatusOK {
+		t.Errorf("by path: %d", status)
+	}
+	if status := getAs("deb.debian.org", "/debian/dists/bookworm/InRelease"); status != http.StatusNotFound {
+		t.Errorf("an unlisted host: %d", status)
+	}
+}
+
 func TestPinnedFileIsServedOnlyWhenItsDigestMatches(t *testing.T) {
 	content := []byte("go1.27.3.linux-amd64.tar.gz bytes")
 	sum := sha256.Sum256(content)

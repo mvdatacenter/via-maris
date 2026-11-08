@@ -33,6 +33,7 @@ The access keys for both stores are read from the environment variables the stor
 - `advisories`: `malicious` refuses versions that a `MAL-` advisory lists. `all` refuses a version that any advisory lists.
 - `held` (files upstreams alone): a directory the gateway fetches and verifies each pinned file into when it starts, and serves it from, as [Maven and pinned files by their own names](#maven-and-pinned-files-by-their-own-names) describes. Without it, a pinned file is fetched and verified on each request.
 - `exceptions`: admit one version through the hold. Each exception names the package, version, a reason, the review that approved it, and an `expires` date. It applies only until that date, and to the hold alone: the advisory check still refuses a malicious version.
+- `hosts` (apt upstreams alone): host names the main listener serves this upstream under, as [apt by its own names](#apt-by-its-own-names) describes. Each is a lower-case DNS name with no port, and no two upstreams list the same one.
 
 ## Clients
 
@@ -52,6 +53,12 @@ The checks differ by front end:
 - **npm, PyPI, Go and Maven** are checked one version at a time.
 - **apt** is served from a dated archive snapshot taken one hold back.
 - **files** serves only names that are pinned to a SHA-256 digest.
+
+## apt by its own names
+
+A container image's apt sources name the archive's own hosts, such as `http://archive.ubuntu.com/ubuntu` and `http://security.ubuntu.com/ubuntu` in `ubuntu:24.04`, and a `docker build` runs apt against those sources rather than the build machine's. An apt upstream's `hosts` lets those installs reach the snapshot with the image unchanged. A request on the main listener whose `Host` names one of them, with or without a port, is served as the `/<name>/` path is, with the path starting at the archive: `GET /ubuntu/dists/noble/InRelease` with `Host: archive.ubuntu.com` reads the same file as `GET /apt/ubuntu/dists/noble/InRelease`. The same paths are refused under both, and a request naming any other host is answered by the upstream paths as before. Ubuntu's archive and its security pockets are both in `snapshot.ubuntu.com`'s `ubuntu` archive, so one upstream serves both names.
+
+apt fetches these sources over plain HTTP on port 80, so the names reach the gateway by resolving them to an address that forwards port 80 to the main listener, such as a Kubernetes Service port 80 whose target is the main listener's port. apt checks every suite's signature against the image's own keyring, so serving the files from the gateway adds no trust.
 
 ## PyPI by its own names
 

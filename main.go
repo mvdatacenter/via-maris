@@ -74,6 +74,7 @@ func newGateway(cfg *Config, client *http.Client, recordLog io.Writer) (*gateway
 
 func (g *gateway) handler() http.Handler {
 	mux := http.NewServeMux()
+	byHost := map[string]http.HandlerFunc{}
 	for i := range g.cfg.Upstreams {
 		up := &g.cfg.Upstreams[i]
 		var h http.HandlerFunc
@@ -93,15 +94,26 @@ func (g *gateway) handler() http.Handler {
 			h = func(w http.ResponseWriter, r *http.Request) { g.pinned(w, r, up) }
 		}
 		mux.HandleFunc("/"+up.Name+"/", g.gated(up, h))
+		for _, host := range up.Hosts {
+			byHost[host] = g.gated(up, func(w http.ResponseWriter, r *http.Request) { g.aptByHost(w, r, up) })
+		}
 	}
 	mux.HandleFunc("/healthz", g.healthz)
 	mux.HandleFunc("/metrics", g.metrics)
-	if g.byName == nil {
+	if g.byName == nil && len(byHost) == 0 {
 		return mux
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodConnect {
+		if r.Method == http.MethodConnect && g.byName != nil {
 			g.byName.connect(w, r)
+			return
+		}
+		host := r.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if h, ok := byHost[strings.ToLower(host)]; ok {
+			h(w, r)
 			return
 		}
 		mux.ServeHTTP(w, r)
