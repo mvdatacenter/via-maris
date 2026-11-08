@@ -97,6 +97,11 @@ func TestConfigRefusals(t *testing.T) {
 		{"go without sumdb", func(c map[string]any) { delete(upstreamAt(c, 2), "sumdb") }, "upstream go: sumdb must be"},
 		{"go index bound below poll", func(c map[string]any) { upstreamAt(c, 2)["indexMaxAge"] = "30s" }, "indexMaxAge must exceed"},
 		{"apt with advisories", func(c map[string]any) { upstreamAt(c, 3)["advisories"] = "malicious" }, "held by its snapshot date alone"},
+		{"hosts on npm", func(c map[string]any) { upstreamAt(c, 0)["hosts"] = []any{"registry.npmjs.org"} }, "only an apt upstream is served by host name"},
+		{"apt host with a port", func(c map[string]any) { upstreamAt(c, 3)["hosts"] = []any{"archive.ubuntu.com:80"} }, `host "archive.ubuntu.com:80" is not a lower-case DNS name, or is repeated`},
+		{"apt host repeated", func(c map[string]any) {
+			upstreamAt(c, 3)["hosts"] = []any{"archive.ubuntu.com", "archive.ubuntu.com"}
+		}, `host "archive.ubuntu.com" is not a lower-case DNS name, or is repeated`},
 		{"files with a hold", func(c map[string]any) { upstreamAt(c, 4)["hold"] = "1h" }, "takes pinned files alone"},
 		{"file climbing out", func(c map[string]any) {
 			upstreamAt(c, 4)["pinned"].([]any)[0].(map[string]any)["name"] = "../x"

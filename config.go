@@ -72,6 +72,7 @@ type Upstream struct {
 	Exceptions  []Exception  `json:"exceptions"`
 	Pinned      []PinnedFile `json:"pinned"`
 	Held        string       `json:"held"`
+	Hosts       []string     `json:"hosts"`
 }
 
 func (u *Upstream) checked() bool {
@@ -140,6 +141,7 @@ type Config struct {
 var (
 	upstreamName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 	hexDigest    = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	hostName     = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
 )
 
 func decodeStrict(path string, v any) error {
@@ -417,6 +419,15 @@ func (u *Upstream) validate(seen map[string]bool) error {
 			return fmt.Errorf("%s: %s must be an http(s) URL without a trailing slash", where, field)
 		}
 		return nil
+	}
+	if len(u.Hosts) > 0 && u.Ecosystem != "apt" {
+		return fmt.Errorf("%s: only an apt upstream is served by host name on the main listener", where)
+	}
+	for _, h := range u.Hosts {
+		if !hostName.MatchString(h) || seen["host "+h] {
+			return fmt.Errorf("%s: host %q is not a lower-case DNS name, or is repeated", where, h)
+		}
+		seen["host "+h] = true
 	}
 	if u.Ecosystem == "files" {
 		if u.URL != "" || u.Hold.Duration != 0 || u.Advisories != "" || len(u.Exceptions) > 0 {
