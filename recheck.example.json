@@ -13,6 +13,7 @@
   "osvScanner": "/osv-scanner",
   "workDir": "/work",
   "alertmanager": "http://alertmanager.example:9093",
+  "alertmanagerTokenFile": "/var/run/secrets/alertmanager/token",
   "alertFor": "45m",
   "inUse": {
     "store": {

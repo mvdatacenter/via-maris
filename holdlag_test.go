@@ -381,6 +381,33 @@ func TestAnAlertmanagerRefusalFailsTheRun(t *testing.T) {
 	}
 }
 
+func TestHoldLagSendsTheAlertmanagerTokenFromItsFile(t *testing.T) {
+	env := newHoldLagEnv(t)
+	env.osv.set(t, "npm", env.npmMonth(120, 60, 40*day, day)...)
+	env.am.requiredToken = "projected-token"
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenFile, []byte("projected-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var c map[string]string
+	b, _ := os.ReadFile(env.path)
+	json.Unmarshal(b, &c)
+	c["alertmanagerTokenFile"] = tokenFile
+	writeJSON(t, env.path, c)
+	if _, err := env.run("2026-10"); err != nil {
+		t.Fatalf("run with the token: %v", err)
+	}
+	if len(env.am.alerts) != 1 {
+		t.Errorf("posted %d alerts, want 1", len(env.am.alerts))
+	}
+
+	c["alertmanagerTokenFile"] = "token"
+	writeJSON(t, env.path, c)
+	if _, _, err := loadHoldLagConfig(env.path); err == nil || !strings.Contains(err.Error(), "must be an absolute path") {
+		t.Errorf("loaded a relative token file: %v", err)
+	}
+}
+
 func TestHoldLagRefusesEcosystemUpstreamsWithDifferentHolds(t *testing.T) {
 	env := newHoldLagEnv(t)
 	var gw map[string]any

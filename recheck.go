@@ -30,11 +30,12 @@ type RecheckConfig struct {
 		InstallationIDEnv string `json:"installationIdEnv"`
 		PrivateKeyEnv     string `json:"privateKeyEnv"`
 	} `json:"github"`
-	OSVScanner   string   `json:"osvScanner"`
-	WorkDir      string   `json:"workDir"`
-	Alertmanager string   `json:"alertmanager"`
-	AlertFor     Duration `json:"alertFor"`
-	InUse        struct {
+	OSVScanner            string   `json:"osvScanner"`
+	WorkDir               string   `json:"workDir"`
+	Alertmanager          string   `json:"alertmanager"`
+	AlertmanagerTokenFile string   `json:"alertmanagerTokenFile"`
+	AlertFor              Duration `json:"alertFor"`
+	InUse                 struct {
 		Store  Store  `json:"store"`
 		Object string `json:"object"`
 	} `json:"inUse"`
@@ -81,8 +82,8 @@ func (c *RecheckConfig) validate() error {
 	if !filepath.IsAbs(c.OSVScanner) || !filepath.IsAbs(c.WorkDir) {
 		return errors.New("osvScanner and workDir must be absolute paths")
 	}
-	if !httpURL(c.Alertmanager) || c.AlertFor.Duration <= 0 {
-		return errors.New("alertmanager must be an http(s) URL without a trailing slash, and alertFor positive")
+	if err := validateAlertmanager(c.Alertmanager, c.AlertmanagerTokenFile, c.AlertFor); err != nil {
+		return err
 	}
 	if err := c.InUse.Store.validate("inUse"); err != nil {
 		return err
@@ -203,7 +204,17 @@ type amAlert struct {
 	EndsAt      time.Time         `json:"endsAt"`
 }
 
-func postAlerts(ctx context.Context, client *http.Client, alertmanager string, alertFor time.Duration, ls []listing, now time.Time) error {
+func validateAlertmanager(url, tokenFile string, alertFor Duration) error {
+	if !httpURL(url) || alertFor.Duration <= 0 {
+		return errors.New("alertmanager must be an http(s) URL without a trailing slash, and alertFor positive")
+	}
+	if tokenFile != "" && !filepath.IsAbs(tokenFile) {
+		return errors.New("alertmanagerTokenFile must be an absolute path")
+	}
+	return nil
+}
+
+func postAlerts(ctx context.Context, client *http.Client, alertmanager, tokenFile string, alertFor time.Duration, ls []listing, now time.Time) error {
 	alerts := make([]amAlert, 0, len(ls))
 	for _, l := range ls {
 		alerts = append(alerts, amAlert{
@@ -226,10 +237,11 @@ func postAlerts(ctx context.Context, client *http.Client, alertmanager string, a
 			EndsAt:   now.Add(alertFor),
 		})
 	}
-	return sendAlerts(ctx, client, alertmanager, alerts)
+	return sendAlerts(ctx, client, alertmanager, tokenFile, alerts)
 }
 
-func sendAlerts(ctx context.Context, client *http.Client, alertmanager string, alerts []amAlert) error {
+// docs/configuration.md, "The re-check", step 5, says why tokenFile is read at every post.
+func sendAlerts(ctx context.Context, client *http.Client, alertmanager, tokenFile string, alerts []amAlert) error {
 	if len(alerts) == 0 {
 		return nil
 	}
@@ -242,6 +254,17 @@ func sendAlerts(ctx context.Context, client *http.Client, alertmanager string, a
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if tokenFile != "" {
+		b, err := os.ReadFile(tokenFile)
+		if err != nil {
+			return fmt.Errorf("reading the Alertmanager token: %w", err)
+		}
+		token := strings.TrimSpace(string(b))
+		if token == "" {
+			return fmt.Errorf("the Alertmanager token in %s is empty", tokenFile)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -539,7 +562,7 @@ func (r *recheckRun) run(ctx context.Context) error {
 	for _, l := range ls {
 		log.Printf("recheck: %s %s@%s (%s) locked in %s %s", l.Ecosystem, l.Name, l.Version, l.Advisory, l.Repository, l.Lockfile)
 	}
-	if err := postAlerts(ctx, r.client, r.cfg.Alertmanager, r.cfg.AlertFor.Duration, ls, start); err != nil {
+	if err := postAlerts(ctx, r.client, r.cfg.Alertmanager, r.cfg.AlertmanagerTokenFile, r.cfg.AlertFor.Duration, ls, start); err != nil {
 		return err
 	}
 

@@ -114,9 +114,10 @@ func repo(name string, archived bool) map[string]any {
 }
 
 type fakeAlertmanager struct {
-	mu     sync.Mutex
-	alerts []map[string]any
-	down   bool
+	mu            sync.Mutex
+	alerts        []map[string]any
+	down          bool
+	requiredToken string
 }
 
 func newFakeAlertmanager(t *testing.T) (*fakeAlertmanager, *httptest.Server) {
@@ -126,6 +127,10 @@ func newFakeAlertmanager(t *testing.T) (*fakeAlertmanager, *httptest.Server) {
 		defer am.mu.Unlock()
 		if am.down || r.Method != http.MethodPost || r.URL.Path != "/api/v2/alerts" {
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if am.requiredToken != "" && r.Header.Get("Authorization") != "Bearer "+am.requiredToken {
+			http.Error(w, "Jwt is missing", http.StatusUnauthorized)
 			return
 		}
 		var got []map[string]any
@@ -461,6 +466,70 @@ func TestAFailedRecheckLeavesThePreviousSetInPlace(t *testing.T) {
 	}
 	if o := env.inUse(); !o.Generated.Equal(time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC)) {
 		t.Errorf("a failed run rewrote the in-use set, generated %s", o.Generated)
+	}
+}
+
+func TestRecheckSendsTheAlertmanagerTokenFromItsFile(t *testing.T) {
+	env := newRecheckEnv(t)
+	env.gh.repos = []map[string]any{repo("mvdatacenter/app", false)}
+	env.gh.tarballs["/repos/mvdatacenter/app/tarball/main"] = tarball(t, map[string]string{"package-lock.json": "{}"})
+	env.locked = []lockedPackage{{"mvdatacenter/app", "package-lock.json", "npm", "fsevents", "1.2.4"}}
+	env.am.requiredToken = "projected-token"
+
+	err := env.run.run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("run without a token against a doorkeeper: %v", err)
+	}
+
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenFile, []byte("projected-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env.run.cfg.AlertmanagerTokenFile = tokenFile
+	if err := env.run.run(context.Background()); err != nil {
+		t.Fatalf("run with the token: %v", err)
+	}
+	if len(env.am.alerts) != 1 {
+		t.Errorf("posted %d alerts, want 1", len(env.am.alerts))
+	}
+}
+
+func TestTheAlertmanagerTokenIsReadAtEachPost(t *testing.T) {
+	am, srv := newFakeAlertmanager(t)
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	alerts := []amAlert{{Labels: map[string]string{"alertname": "Test"}}}
+	for _, token := range []string{"first", "rotated"} {
+		if err := os.WriteFile(tokenFile, []byte(token), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		am.requiredToken = token
+		if err := sendAlerts(context.Background(), http.DefaultClient, srv.URL, tokenFile, alerts); err != nil {
+			t.Errorf("post with the %s token: %v", token, err)
+		}
+	}
+}
+
+func TestAMissingOrEmptyAlertmanagerTokenFailsThePost(t *testing.T) {
+	_, srv := newFakeAlertmanager(t)
+	dir := t.TempDir()
+	empty := filepath.Join(dir, "empty")
+	if err := os.WriteFile(empty, []byte(" \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alerts := []amAlert{{Labels: map[string]string{"alertname": "Test"}}}
+	for file, want := range map[string]string{filepath.Join(dir, "absent"): "reading the Alertmanager token", empty: "is empty"} {
+		err := sendAlerts(context.Background(), http.DefaultClient, srv.URL, file, alerts)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("post with token file %s: %v, want %q", file, err, want)
+		}
+	}
+}
+
+func TestRecheckRefusesARelativeAlertmanagerTokenFile(t *testing.T) {
+	env := newRecheckEnv(t)
+	env.run.cfg.AlertmanagerTokenFile = "token"
+	if err := env.run.cfg.validate(); err == nil || !strings.Contains(err.Error(), "alertmanagerTokenFile must be an absolute path") {
+		t.Errorf("validated a relative token file: %v", err)
 	}
 }
 
