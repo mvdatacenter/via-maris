@@ -24,10 +24,11 @@ const (
 )
 
 type HoldLagConfig struct {
-	Gateway      string   `json:"gateway"`
-	GoWindow     Duration `json:"goWindow"`
-	Alertmanager string   `json:"alertmanager"`
-	AlertFor     Duration `json:"alertFor"`
+	Gateway               string   `json:"gateway"`
+	GoWindow              Duration `json:"goWindow"`
+	Alertmanager          string   `json:"alertmanager"`
+	AlertmanagerTokenFile string   `json:"alertmanagerTokenFile"`
+	AlertFor              Duration `json:"alertFor"`
 }
 
 func loadHoldLagConfig(path string) (*HoldLagConfig, *Config, error) {
@@ -41,8 +42,8 @@ func loadHoldLagConfig(path string) (*HoldLagConfig, *Config, error) {
 	if c.GoWindow.Duration <= 0 {
 		return nil, nil, fmt.Errorf("%s: goWindow must be positive", path)
 	}
-	if !httpURL(c.Alertmanager) || c.AlertFor.Duration <= 0 {
-		return nil, nil, fmt.Errorf("%s: alertmanager must be an http(s) URL without a trailing slash, and alertFor positive", path)
+	if err := validateAlertmanager(c.Alertmanager, c.AlertmanagerTokenFile, c.AlertFor); err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", path, err)
 	}
 	var gw Config
 	if err := decodeStrict(c.Gateway, &gw); err != nil {
@@ -206,7 +207,7 @@ func (r *holdLagRun) run(ctx context.Context, month string) (*HoldLagReport, err
 		log.Printf("hold-lag %s %s: %d entries (%d naming no versions), %d versions, %d dated %v, %d undated, %d published after the listing; %d (%.1f%%) unlisted when the %s hold ended%s",
 			report.Month, e.Ecosystem, e.Entries, e.EntriesNamingNoVersions, e.Versions, e.Dated, e.DatedFrom, e.Undated, e.PublishedAfterListing, e.UnlistedAtHold, e.Share*100, e.Hold, noteSuffix(e.Note))
 	}
-	if err := sendAlerts(ctx, r.client, r.cfg.Alertmanager, outOfBandAlerts(report, r.cfg, r.now)); err != nil {
+	if err := sendAlerts(ctx, r.client, r.cfg.Alertmanager, r.cfg.AlertmanagerTokenFile, outOfBandAlerts(report, r.cfg, r.now)); err != nil {
 		return nil, err
 	}
 	return report, nil
