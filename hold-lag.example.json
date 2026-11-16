@@ -2,5 +2,6 @@
   "gateway": "config.example.json",
   "goWindow": "1440h",
   "alertmanager": "http://alertmanager.example:9093",
+  "alertmanagerTokenFile": "/var/run/secrets/alertmanager/token",
   "alertFor": "768h"
 }
