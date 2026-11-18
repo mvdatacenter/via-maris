@@ -124,7 +124,8 @@ A JVM ignores `SSL_CERT_FILE` and trusts its own `cacerts`, so the trust store i
 ## Operating
 
 - `GET /healthz` answers 503 and names what is not ready: an ecosystem's advisory data, a Go index, the record upload, or with `byName` the TLS certificate and, with `byName.npm` or `byName.maven`, the npm or Maven TLS certificate. A pinned file not yet held does not make the gateway unready, because its upstream can be down while every other front end serves. A stale in-use set only stops fix releases from passing the hold, so the gateway stays ready.
-- `GET /metrics` serves Prometheus text. With `byName`, `via_maris_tls_expiry_timestamp_seconds` gives the leaf's and the CA's expiry as Unix time, labelled `certificate="leaf"` and `certificate="ca"` (and `certificate="npm-leaf"` and `certificate="npm-ca"` with `byName.npm`, and `certificate="maven-leaf"` and `certificate="maven-ca"` with `byName.maven`), and 0 before a pair has loaded. `via_maris_pinned_unheld` counts, for each files upstream with `held`, the pinned files not yet held.
+- `GET /metrics` serves Prometheus text. With `byName`, `via_maris_tls_expiry_timestamp_seconds` gives the leaf's and the CA's expiry as Unix time, labelled `certificate="leaf"` and `certificate="ca"` (and `certificate="npm-leaf"` and `certificate="npm-ca"` with `byName.npm`, and `certificate="maven-leaf"` and `certificate="maven-ca"` with `byName.maven`), and 0 before a pair has loaded. `via_maris_pinned_unheld` counts, for each files upstream with `held`, the pinned files not yet held. The two series a workstation's reports set are under "Workstation route reports" below.
+- `POST /workstation-route` takes a workstation's report on its package-gateway settings, as "Workstation route reports" below describes.
 
 A refused version is answered 403, with the refusal reason in the response.
 
@@ -171,3 +172,17 @@ For each of npm, PyPI, Maven and Go the run:
 A month with fewer than 100 dated versions is thin: it is never out of band, and the report notes that PyPI's and Maven's holds follow npm's. Where Go's shortest hold is longer than its hold, the report notes that the gateway reads its Go index over the hold before `/healthz` reports ready, so a longer hold lengthens that start-up. Each ecosystem that is out of band gets one `ViaMarisHoldLagOutOfBand` alert, posted to `alertmanager` at severity `ticket` with its ecosystem and month as labels and ending `alertFor` after the run. Its description names the shortest hold and the `gateway` file that sets the hold. `alertFor` should run past the next month's report.
 
 The report is written to stdout as JSON, with one log line per ecosystem. Any failure exits non-zero: a month that has not ended, an export, registry or store that cannot be read, or an alert Alertmanager refuses. A registry's 404 is not a failure, because it means the version is gone.
+
+## Workstation route reports
+
+A workstation reaches the gateway through settings its installer writes, and any other tool can rewrite one of them before the installer runs again. The workstation's own reporter reads them back each hour and posts the result as JSON to `POST /workstation-route`, on the same listener as the front ends:
+
+```json
+{"workstation": "dev-1", "settings": {"pip-proxy": 2, "npm-cafile": 0}}
+```
+
+`workstation` is 1 to 63 letters, digits, dots, underscores or hyphens, starting with a letter or digit. `settings` holds each setting the installer put in force, with the number of the workstation's reports in a row that have found it differing, 0 when it matches. The setting names are `uv-wrapper`, `pip-proxy`, `pip-cert`, `npm-https-proxy`, `npm-cafile` and `gradle-block`. The run is counted on the workstation, so it survives a gateway restart. A report is answered 204. A body over 4096 bytes, holding more than one JSON object, or with another field, another setting name or a count outside 0 to 1048576 is answered 400 with the reason.
+
+`GET /metrics` serves each workstation's last report: `via_maris_workstation_route_report_timestamp_seconds{workstation}`, the Unix time it arrived, and `via_maris_workstation_route_differing_reports{workstation,setting}` for each setting it named. A setting the last report left out has no series. The gateway holds reports from at most 256 workstations. A report from a further one drops the report that arrived longest ago, and the drop is logged. Each report that names a differing setting is logged with the setting and its count.
+
+The reports are held in memory, so a restart drops them until each workstation's next report. Nothing authenticates a report: anything that reaches the listener can post one under any workstation's name, so the series record what was reported under a name, not that the named workstation sent it. A forged report can make a name's series read clean or drifted until that workstation's next report replaces it. A flood of more than 256 invented names keeps dropping held reports, so the invented names fill the series and a real workstation's series is gone until its next report. Refusing new names at the bound would instead let 256 posts lock out every workstation that had not yet reported until the gateway restarted.
