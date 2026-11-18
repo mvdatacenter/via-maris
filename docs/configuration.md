@@ -171,3 +171,17 @@ For each of npm, PyPI, Maven and Go the run:
 A month with fewer than 100 dated versions is thin: it is never out of band, and the report notes that PyPI's and Maven's holds follow npm's. Where Go's shortest hold is longer than its hold, the report notes that the gateway reads its Go index over the hold before `/healthz` reports ready, so a longer hold lengthens that start-up. Each ecosystem that is out of band gets one `ViaMarisHoldLagOutOfBand` alert, posted to `alertmanager` at severity `ticket` with its ecosystem and month as labels and ending `alertFor` after the run. Its description names the shortest hold and the `gateway` file that sets the hold. `alertFor` should run past the next month's report.
 
 The report is written to stdout as JSON, with one log line per ecosystem. Any failure exits non-zero: a month that has not ended, an export, registry or store that cannot be read, or an alert Alertmanager refuses. A registry's 404 is not a failure, because it means the version is gone.
+
+## Workstation route reports
+
+A workstation reaches the gateway through settings its installer writes, and any other tool can rewrite one of them before the installer runs again. The workstation's own reporter reads them back each hour and posts the result as JSON to `POST /workstation-route`, on the same listener as the front ends:
+
+```json
+{"workstation": "dev-1", "settings": {"pip-proxy": 2, "npm-cafile": 0}}
+```
+
+`workstation` is 1 to 63 letters, digits, dots, underscores or hyphens, starting with a letter or digit. `settings` holds each setting the installer put in force, with the number of the workstation's reports in a row that have found it differing, 0 when it matches. The setting names are `uv-wrapper`, `pip-proxy`, `pip-cert`, `npm-https-proxy`, `npm-cafile` and `gradle-block`. The run is counted on the workstation, so it survives a gateway restart. A report is answered 204. A body with another field, another setting name or a count outside 0 to 1048576 is answered 400 with the reason.
+
+`GET /metrics` serves each workstation's last report: `via_maris_workstation_route_report_timestamp_seconds{workstation}`, the Unix time it arrived, and `via_maris_workstation_route_differing_reports{workstation,setting}` for each setting it named. A setting the last report left out has no series. The gateway holds reports from at most 256 workstations; a report from a further one is answered 429 and logged. Each report that names a differing setting is logged with the setting and its count.
+
+The reports are held in memory, so a restart drops them until each workstation's next report. Nothing authenticates a report: anything that reaches the listener can post one under any workstation's name, so the series record what was reported under a name, not that the named workstation sent it.
