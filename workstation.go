@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,6 +32,8 @@ const maxWorkstations = 256
 // exactly; a run that long has fired its alert for over a year.
 const maxDiffering = 1 << 20
 
+const maxReportBytes = 4096
+
 var workstationName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
 
 type workstationReport struct {
@@ -58,14 +61,11 @@ func (s *workstationRoutes) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "via-maris: method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var rep workstationReport
-	dec := json.NewDecoder(io.LimitReader(r.Body, 4096))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&rep); err != nil {
-		http.Error(w, "via-maris: workstation report: "+err.Error(), http.StatusBadRequest)
-		return
+	rep, err := readWorkstationReport(r.Body)
+	if err == nil {
+		err = rep.valid()
 	}
-	if err := rep.valid(); err != nil {
+	if err != nil {
 		http.Error(w, "via-maris: workstation report: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -85,6 +85,26 @@ func (s *workstationRoutes) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func readWorkstationReport(body io.Reader) (*workstationReport, error) {
+	b, err := io.ReadAll(io.LimitReader(body, maxReportBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > maxReportBytes {
+		return nil, fmt.Errorf("body is over %d bytes", maxReportBytes)
+	}
+	var rep workstationReport
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&rep); err != nil {
+		return nil, err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, fmt.Errorf("body holds more than one JSON object")
+	}
+	return &rep, nil
 }
 
 func (rep *workstationReport) valid() error {

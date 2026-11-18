@@ -60,6 +60,9 @@ func TestWorkstationReportRefusesWhatItCannotCount(t *testing.T) {
 		{`{"workstation":"","settings":{}}`, `workstation "" is not`},
 		{`{"workstation":"dev-1","settings":{"registry":1}}`, `setting "registry" is not one this gateway counts`},
 		{`{"workstation":"dev-1","settings":{"pip-proxy":-1}}`, `setting "pip-proxy" has -1 differing reports`},
+		{`{"workstation":"dev-1","settings":{"pip-proxy":1048577}}`, `setting "pip-proxy" has 1048577 differing reports, outside 0 to 1048576`},
+		{`{"workstation":"dev-1","settings":{}}` + strings.Repeat(" ", maxReportBytes), `body is over 4096 bytes`},
+		{`{"workstation":"dev-1","settings":{}} {}`, `body holds more than one JSON object`},
 		{`{"workstation":"dev-1","settings":{},"extra":1}`, `unknown field "extra"`},
 		{`not json`, `invalid character`},
 	} {
