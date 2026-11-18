@@ -124,7 +124,8 @@ A JVM ignores `SSL_CERT_FILE` and trusts its own `cacerts`, so the trust store i
 ## Operating
 
 - `GET /healthz` answers 503 and names what is not ready: an ecosystem's advisory data, a Go index, the record upload, or with `byName` the TLS certificate and, with `byName.npm` or `byName.maven`, the npm or Maven TLS certificate. A pinned file not yet held does not make the gateway unready, because its upstream can be down while every other front end serves. A stale in-use set only stops fix releases from passing the hold, so the gateway stays ready.
-- `GET /metrics` serves Prometheus text. With `byName`, `via_maris_tls_expiry_timestamp_seconds` gives the leaf's and the CA's expiry as Unix time, labelled `certificate="leaf"` and `certificate="ca"` (and `certificate="npm-leaf"` and `certificate="npm-ca"` with `byName.npm`, and `certificate="maven-leaf"` and `certificate="maven-ca"` with `byName.maven`), and 0 before a pair has loaded. `via_maris_pinned_unheld` counts, for each files upstream with `held`, the pinned files not yet held.
+- `GET /metrics` serves Prometheus text. With `byName`, `via_maris_tls_expiry_timestamp_seconds` gives the leaf's and the CA's expiry as Unix time, labelled `certificate="leaf"` and `certificate="ca"` (and `certificate="npm-leaf"` and `certificate="npm-ca"` with `byName.npm`, and `certificate="maven-leaf"` and `certificate="maven-ca"` with `byName.maven`), and 0 before a pair has loaded. `via_maris_pinned_unheld` counts, for each files upstream with `held`, the pinned files not yet held. The two series a workstation's reports set are under "Workstation route reports" below.
+- `POST /workstation-route` takes a workstation's report on its package-gateway settings, as "Workstation route reports" below describes.
 
 A refused version is answered 403, with the refusal reason in the response.
 
