@@ -29,6 +29,7 @@ type gateway struct {
 	poms       *pomDates
 	ecosystems []string
 	byName     *byName
+	stations   *workstationRoutes
 }
 
 func newGateway(cfg *Config, client *http.Client, recordLog io.Writer) (*gateway, error) {
@@ -47,9 +48,10 @@ func newGateway(cfg *Config, client *http.Client, recordLog io.Writer) (*gateway
 			prefix: cfg.Records.Prefix,
 			host:   host,
 		},
-		goIdx: map[string]*goIndex{},
-		held:  map[string]*heldFiles{},
-		poms:  &pomDates{at: map[string]time.Time{}},
+		goIdx:    map[string]*goIndex{},
+		held:     map[string]*heldFiles{},
+		poms:     &pomDates{at: map[string]time.Time{}},
+		stations: newWorkstationRoutes(),
 	}
 	seen := map[string]bool{}
 	for i := range cfg.Upstreams {
@@ -100,6 +102,7 @@ func (g *gateway) handler() http.Handler {
 	}
 	mux.HandleFunc("/healthz", g.healthz)
 	mux.HandleFunc("/metrics", g.metrics)
+	mux.HandleFunc("/workstation-route", g.stations.serve)
 	if g.byName == nil && len(byHost) == 0 {
 		return mux
 	}
@@ -230,6 +233,7 @@ func (g *gateway) metrics(w http.ResponseWriter, r *http.Request) {
 	for name, h := range g.held {
 		fmt.Fprintf(w, "via_maris_pinned_unheld{upstream=%q} %d\n", name, h.unheld())
 	}
+	g.stations.metrics(w)
 }
 
 func unixOrZero(t time.Time) int64 {
