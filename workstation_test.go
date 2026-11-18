@@ -79,17 +79,28 @@ func TestWorkstationReportRefusesWhatItCannotCount(t *testing.T) {
 	}
 }
 
-func TestWorkstationReportsStopAtTheBound(t *testing.T) {
+func TestWorkstationReportsPastTheBoundDropTheOldest(t *testing.T) {
 	env := newWorkstationEnv(t)
+	at := time.Unix(1795000000, 0)
 	for i := 0; i < maxWorkstations; i++ {
+		env.g.stations.now = func() time.Time { return at.Add(time.Duration(i) * time.Minute) }
 		if code, body := env.report(fmt.Sprintf(`{"workstation":"dev-%d","settings":{}}`, i)); code != http.StatusNoContent {
 			t.Fatalf("report %d answered %d %q", i, code, body)
 		}
 	}
-	if code, body := env.report(`{"workstation":"one-more","settings":{}}`); code != http.StatusTooManyRequests {
-		t.Errorf("a workstation past the bound answered %d %q, want 429", code, body)
+	env.g.stations.now = func() time.Time { return at.Add(24 * time.Hour) }
+	if code, body := env.report(`{"workstation":"dev-0","settings":{"pip-cert":1}}`); code != http.StatusNoContent {
+		t.Fatalf("a workstation already held answered %d %q at the bound", code, body)
 	}
-	if code, _ := env.report(`{"workstation":"dev-0","settings":{"pip-cert":1}}`); code != http.StatusNoContent {
-		t.Errorf("a workstation already held was refused at the bound: %d", code)
+	if code, body := env.report(`{"workstation":"one-more","settings":{}}`); code != http.StatusNoContent {
+		t.Fatalf("a workstation past the bound answered %d %q, want 204", code, body)
+	}
+	_, metrics := env.get("/metrics")
+	if strings.Contains(metrics, `workstation="dev-1"}`) {
+		t.Errorf("the oldest report, dev-1's, was kept past the bound")
+	}
+	wantContains(t, metrics, `workstation="one-more"}`, `workstation="dev-0"}`, `workstation="dev-2"}`)
+	if n := strings.Count(metrics, "via_maris_workstation_route_report_timestamp_seconds{"); n != maxWorkstations {
+		t.Errorf("metrics hold %d workstations, want %d", n, maxWorkstations)
 	}
 }

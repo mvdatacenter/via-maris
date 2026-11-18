@@ -70,12 +70,10 @@ func (s *workstationRoutes) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	_, known := s.last[rep.Workstation]
-	if !known && len(s.last) >= maxWorkstations {
-		s.mu.Unlock()
-		log.Printf("workstation report: refused %q, past the bound of %d workstations", rep.Workstation, maxWorkstations)
-		http.Error(w, fmt.Sprintf("via-maris: workstation report: this gateway already holds reports from %d workstations", maxWorkstations), http.StatusTooManyRequests)
-		return
+	if _, known := s.last[rep.Workstation]; !known && len(s.last) >= maxWorkstations {
+		oldest := s.oldest()
+		log.Printf("workstation report: dropped %s's report from %s to hold %s's, past the bound of %d workstations", oldest, s.last[oldest].at.UTC().Format(time.RFC3339), rep.Workstation, maxWorkstations)
+		delete(s.last, oldest)
 	}
 	s.last[rep.Workstation] = workstationRoute{at: s.now(), settings: rep.Settings}
 	s.mu.Unlock()
@@ -85,6 +83,16 @@ func (s *workstationRoutes) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *workstationRoutes) oldest() string {
+	var name string
+	for n, r := range s.last {
+		if name == "" || r.at.Before(s.last[name].at) || (r.at.Equal(s.last[name].at) && n < name) {
+			name = n
+		}
+	}
+	return name
 }
 
 func readWorkstationReport(body io.Reader) (*workstationReport, error) {
