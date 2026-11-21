@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -13,6 +14,29 @@ func setExampleKeys(t *testing.T) {
 		t.Setenv(env, "x")
 	}
 	t.Setenv("RECORDS_ENDPOINT", "https://account.records.example")
+}
+
+func exampleWithItsDeployedTokenFileReplaced(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	token := filepath.Join(dir, "token")
+	if err := os.WriteFile(token, []byte("example-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const deployed = `"alertmanagerTokenFile": "/var/run/secrets/alertmanager/token"`
+	if !bytes.Contains(b, []byte(deployed)) {
+		t.Fatalf("%s does not set %s", path, deployed)
+	}
+	b = bytes.Replace(b, []byte(deployed), []byte(`"alertmanagerTokenFile": "`+token+`"`), 1)
+	out := filepath.Join(dir, filepath.Base(path))
+	if err := os.WriteFile(out, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 func TestExampleConfigLoads(t *testing.T) {
