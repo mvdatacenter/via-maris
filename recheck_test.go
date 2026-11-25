@@ -234,7 +234,7 @@ func TestExampleRecheckConfigLoads(t *testing.T) {
 	for _, env := range []string{"GITHUB_APP_ID", "GITHUB_APP_INSTALLATION_ID", "GITHUB_APP_PRIVATE_KEY"} {
 		t.Setenv(env, "x")
 	}
-	cfg, err := loadRecheckConfig("recheck.example.json")
+	cfg, err := loadRecheckConfig(exampleWithItsDeployedTokenFileReplaced(t, "recheck.example.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -530,6 +530,21 @@ func TestRecheckRefusesARelativeAlertmanagerTokenFile(t *testing.T) {
 	env.run.cfg.AlertmanagerTokenFile = "token"
 	if err := env.run.cfg.validate(); err == nil || !strings.Contains(err.Error(), "alertmanagerTokenFile must be an absolute path") {
 		t.Errorf("validated a relative token file: %v", err)
+	}
+}
+
+func TestRecheckRefusesAMissingOrEmptyAlertmanagerTokenFileAtLoad(t *testing.T) {
+	env := newRecheckEnv(t)
+	dir := t.TempDir()
+	empty := filepath.Join(dir, "empty")
+	if err := os.WriteFile(empty, []byte(" \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for file, want := range map[string]string{filepath.Join(dir, "absent"): "reading the Alertmanager token", empty: "is empty"} {
+		env.run.cfg.AlertmanagerTokenFile = file
+		if err := env.run.cfg.validate(); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("validated token file %s: %v, want %q", file, err, want)
+		}
 	}
 }
 

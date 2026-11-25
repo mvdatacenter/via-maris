@@ -208,10 +208,26 @@ func validateAlertmanager(url, tokenFile string, alertFor Duration) error {
 	if !httpURL(url) || alertFor.Duration <= 0 {
 		return errors.New("alertmanager must be an http(s) URL without a trailing slash, and alertFor positive")
 	}
-	if tokenFile != "" && !filepath.IsAbs(tokenFile) {
+	if tokenFile == "" {
+		return nil
+	}
+	if !filepath.IsAbs(tokenFile) {
 		return errors.New("alertmanagerTokenFile must be an absolute path")
 	}
-	return nil
+	_, err := readAlertmanagerToken(tokenFile)
+	return err
+}
+
+func readAlertmanagerToken(tokenFile string) (string, error) {
+	b, err := os.ReadFile(tokenFile)
+	if err != nil {
+		return "", fmt.Errorf("reading the Alertmanager token: %w", err)
+	}
+	token := strings.TrimSpace(string(b))
+	if token == "" {
+		return "", fmt.Errorf("the Alertmanager token in %s is empty", tokenFile)
+	}
+	return token, nil
 }
 
 func postAlerts(ctx context.Context, client *http.Client, alertmanager, tokenFile string, alertFor time.Duration, ls []listing, now time.Time) error {
@@ -255,13 +271,9 @@ func sendAlerts(ctx context.Context, client *http.Client, alertmanager, tokenFil
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if tokenFile != "" {
-		b, err := os.ReadFile(tokenFile)
+		token, err := readAlertmanagerToken(tokenFile)
 		if err != nil {
-			return fmt.Errorf("reading the Alertmanager token: %w", err)
-		}
-		token := strings.TrimSpace(string(b))
-		if token == "" {
-			return fmt.Errorf("the Alertmanager token in %s is empty", tokenFile)
+			return err
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 	}

@@ -385,6 +385,10 @@ func TestHoldLagSendsTheAlertmanagerTokenFromItsFile(t *testing.T) {
 	env := newHoldLagEnv(t)
 	env.osv.set(t, "npm", env.npmMonth(120, 60, 40*day, day)...)
 	env.am.requiredToken = "projected-token"
+	if _, err := env.run("2026-10"); err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("run without a token against a doorkeeper: %v", err)
+	}
+
 	tokenFile := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(tokenFile, []byte("projected-token"), 0o600); err != nil {
 		t.Fatal(err)
@@ -405,6 +409,15 @@ func TestHoldLagSendsTheAlertmanagerTokenFromItsFile(t *testing.T) {
 	writeJSON(t, env.path, c)
 	if _, _, err := loadHoldLagConfig(env.path); err == nil || !strings.Contains(err.Error(), "must be an absolute path") {
 		t.Errorf("loaded a relative token file: %v", err)
+	}
+
+	if err := os.WriteFile(tokenFile, []byte("\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c["alertmanagerTokenFile"] = tokenFile
+	writeJSON(t, env.path, c)
+	if _, _, err := loadHoldLagConfig(env.path); err == nil || !strings.Contains(err.Error(), "is empty") {
+		t.Errorf("loaded an empty token file: %v", err)
 	}
 }
 
@@ -436,7 +449,7 @@ func TestHoldLagRefusesAGoWindowNoLongerThanTheGoHold(t *testing.T) {
 
 func TestExampleHoldLagConfigLoads(t *testing.T) {
 	setExampleKeys(t)
-	cfg, gw, err := loadHoldLagConfig("hold-lag.example.json")
+	cfg, gw, err := loadHoldLagConfig(exampleWithItsDeployedTokenFileReplaced(t, "hold-lag.example.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
