@@ -14,11 +14,13 @@ import (
 // slowWrite is how long each write on the files host's first connection
 // takes. It stands for the one degraded connection every download shared,
 // as docs/configuration.md "Operating" describes.
-const slowWrite = 500 * time.Millisecond
+const slowWrite = 200 * time.Millisecond
 
 type slowFirstListener struct {
 	net.Listener
 	once sync.Once
+	mu   sync.Mutex
+	slow string
 }
 
 func (l *slowFirstListener) Accept() (net.Conn, error) {
@@ -26,12 +28,21 @@ func (l *slowFirstListener) Accept() (net.Conn, error) {
 	if err != nil {
 		return c, err
 	}
-	slow := false
-	l.once.Do(func() { slow = true })
-	if slow {
-		return slowConn{c}, nil
+	first := false
+	l.once.Do(func() { first = true })
+	if !first {
+		return c, nil
 	}
-	return c, nil
+	l.mu.Lock()
+	l.slow = c.RemoteAddr().String()
+	l.mu.Unlock()
+	return slowConn{c}, nil
+}
+
+func (l *slowFirstListener) slowAddr() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.slow
 }
 
 type slowConn struct{ net.Conn }
@@ -41,58 +52,109 @@ func (c slowConn) Write(b []byte) (int, error) {
 	return c.Conn.Write(b)
 }
 
-// newSlowFirstFilesHost offers HTTP/2, as files.pythonhosted.org does.
-func newSlowFirstFilesHost(t *testing.T) (srv *httptest.Server, protos func() []int) {
-	var mu sync.Mutex
-	var seen []int
-	srv = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		seen = append(seen, r.ProtoMajor)
-		mu.Unlock()
-		w.Write([]byte("file " + strings.TrimPrefix(r.URL.Path, "/")))
-	}))
-	srv.EnableHTTP2 = true
-	srv.Listener = &slowFirstListener{Listener: srv.Listener}
-	srv.StartTLS()
-	t.Cleanup(srv.Close)
-	return srv, func() []int {
-		mu.Lock()
-		defer mu.Unlock()
-		return append([]int(nil), seen...)
+// filesHost records, for each request, its protocol and whether it arrived
+// on the slow connection. Once armed for n requests, it holds each one until
+// all n are in flight, so they need n streams at once.
+type filesHost struct {
+	srv  *httptest.Server
+	ln   *slowFirstListener
+	mu   sync.Mutex
+	reqs []filesRequest
+	wait int
+	all  chan struct{}
+}
+
+type filesRequest struct {
+	proto  int
+	onSlow bool
+}
+
+func newFilesHost(t *testing.T) *filesHost {
+	h := &filesHost{}
+	h.srv = httptest.NewUnstartedServer(http.HandlerFunc(h.serve))
+	h.srv.EnableHTTP2 = true
+	h.ln = &slowFirstListener{Listener: h.srv.Listener}
+	h.srv.Listener = h.ln
+	h.srv.StartTLS()
+	t.Cleanup(h.srv.Close)
+	return h
+}
+
+func (h *filesHost) serve(w http.ResponseWriter, r *http.Request) {
+	h.mu.Lock()
+	h.reqs = append(h.reqs, filesRequest{proto: r.ProtoMajor, onSlow: r.RemoteAddr == h.ln.slowAddr()})
+	all := h.all
+	if all != nil {
+		h.wait--
+		if h.wait == 0 {
+			close(all)
+		}
 	}
+	h.mu.Unlock()
+	if all != nil {
+		select {
+		case <-all:
+		case <-time.After(time.Minute):
+		}
+	}
+	w.Write([]byte("file " + strings.TrimPrefix(r.URL.Path, "/")))
+}
+
+func (h *filesHost) arm(n int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.reqs = nil
+	h.wait = n
+	h.all = make(chan struct{})
+}
+
+func (h *filesHost) requests() []filesRequest {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]filesRequest(nil), h.reqs...)
+}
+
+// upstreamClientFor is newUpstreamClient trusting the files host's test CA.
+// Setting TLSClientConfig turns off the HTTP/2 Go attempts by default, so
+// ForceAttemptHTTP2 turns it back on, as the production client has it with
+// no TLSClientConfig.
+func upstreamClientFor(h *filesHost) *http.Client {
+	client := newUpstreamClient()
+	tr := client.Transport.(*http.Transport)
+	tr.TLSClientConfig = h.srv.Client().Transport.(*http.Transport).TLSClientConfig
+	tr.ForceAttemptHTTP2 = true
+	return client
 }
 
 // downloadAll first fetches one wheel alone, so the files host's slow first
 // connection is the one the client holds, as the gateway held its connection
-// to files.pythonhosted.org for days. It then fetches every wheel through the
-// gateway at once, as a CI job's installer does, and returns how long each
-// took.
-func downloadAll(env *testEnv, wheels []string) []time.Duration {
+// to files.pythonhosted.org. It then fetches every wheel through the gateway
+// at once, as a CI job's installer does, and returns what the files host saw
+// of those parallel requests.
+func downloadAll(env *testEnv, h *filesHost, wheels []string) []filesRequest {
 	if status, body := env.get("/pypi/files/packages/ab/" + wheels[0]); status != http.StatusOK {
 		env.t.Fatalf("first download: %d %q", status, body)
 	}
-	took := make([]time.Duration, len(wheels))
+	h.arm(len(wheels))
 	var wg sync.WaitGroup
-	for i, name := range wheels {
+	for _, name := range wheels {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			start := time.Now()
 			status, body := env.get("/pypi/files/packages/ab/" + name)
-			took[i] = time.Since(start)
 			if status != http.StatusOK || body != "file packages/ab/"+name {
 				env.t.Errorf("%s: %d %q", name, status, body)
 			}
 		}()
 	}
 	wg.Wait()
-	return took
+	return h.requests()
 }
 
-func slowCount(took []time.Duration) int {
+func onSlowCount(reqs []filesRequest) int {
 	n := 0
-	for _, d := range took {
-		if d >= slowWrite/2 {
+	for _, r := range reqs {
+		if r.onSlow {
 			n++
 		}
 	}
@@ -108,58 +170,47 @@ func TestUpstreamDownloadsDoNotQueueBehindOneSlowConnection(t *testing.T) {
 		uploads[name] = 100 * day
 		wheels = append(wheels, name)
 	}
-
-	// The gateway's client up to v0.1.7: a Transport left to Go's defaults,
-	// which negotiates HTTP/2 with a host that offers it. The test names
-	// HTTP/2 explicitly because trusting the test CA sets TLSClientConfig,
-	// which turns the default off.
-	t.Run("HTTP/2 client queues every download behind the slow connection", func(t *testing.T) {
-		files, protos := newSlowFirstFilesHost(t)
+	newEnv := func(t *testing.T, h *filesHost, client *http.Client) *testEnv {
 		f := newFakePyPI(t, "six", uploads)
-		f.filesBase = files.URL
-		client := newUpstreamClient()
-		tr := client.Transport.(*http.Transport)
-		tr.TLSClientConfig = files.Client().Transport.(*http.Transport).TLSClientConfig
-		var both http.Protocols
-		both.SetHTTP1(true)
-		both.SetHTTP2(true)
-		tr.Protocols = &both
-		env := newTestEnvWithClient(t, client, Upstream{Name: "pypi", Ecosystem: "PyPI", URL: f.index.URL, Files: files.URL, Hold: Duration{7 * day}, Advisories: "malicious"})
+		f.filesBase = h.srv.URL
+		env := newTestEnvWithClient(t, client, Upstream{Name: "pypi", Ecosystem: "PyPI", URL: f.index.URL, Files: h.srv.URL, Hold: Duration{7 * day}, Advisories: "malicious"})
 		env.loadAdvisories()
+		return env
+	}
 
-		took := downloadAll(env, wheels)
-		if got := slowCount(took); got != n {
-			t.Fatalf("%d of %d downloads slow (%v), want all: the reproduction no longer reproduces", got, n, took)
+	// The gateway's client up to v0.1.7 set no Protocols, so Go negotiated
+	// HTTP/2 with a host offering it.
+	t.Run("HTTP/2 client queues every download behind the slow connection", func(t *testing.T) {
+		h := newFilesHost(t)
+		client := upstreamClientFor(h)
+		client.Transport.(*http.Transport).Protocols = nil
+		reqs := downloadAll(newEnv(t, h, client), h, wheels)
+		if len(reqs) != n || onSlowCount(reqs) != n {
+			t.Fatalf("%d of %d parallel downloads on the slow connection (%+v), want all: the reproduction no longer reproduces", onSlowCount(reqs), n, reqs)
 		}
-		for _, p := range protos() {
-			if p != 2 {
-				t.Fatalf("files host saw HTTP/%d, want HTTP/2 throughout", p)
+		for _, r := range reqs {
+			if r.proto != 2 {
+				t.Fatalf("files host saw HTTP/%d, want HTTP/2 throughout", r.proto)
 			}
 		}
 	})
 
 	t.Run("gateway client gives each download a connection of its own", func(t *testing.T) {
-		files, protos := newSlowFirstFilesHost(t)
-		f := newFakePyPI(t, "six", uploads)
-		f.filesBase = files.URL
-		client := newUpstreamClient()
-		client.Transport.(*http.Transport).TLSClientConfig = files.Client().Transport.(*http.Transport).TLSClientConfig
-		env := newTestEnvWithClient(t, client, Upstream{Name: "pypi", Ecosystem: "PyPI", URL: f.index.URL, Files: files.URL, Hold: Duration{7 * day}, Advisories: "malicious"})
-		env.loadAdvisories()
-
-		took := downloadAll(env, wheels)
-		if got := slowCount(took); got > 1 {
-			t.Fatalf("%d of %d downloads slow (%v), want at most the one on the slow connection", got, n, took)
+		h := newFilesHost(t)
+		env := newEnv(t, h, upstreamClientFor(h))
+		reqs := downloadAll(env, h, wheels)
+		if len(reqs) != n || onSlowCount(reqs) > 1 {
+			t.Fatalf("%d of %d parallel downloads on the slow connection (%+v), want at most one", onSlowCount(reqs), n, reqs)
 		}
-		for _, p := range protos() {
-			if p != 1 {
-				t.Fatalf("files host saw HTTP/%d, want HTTP/1.1 throughout", p)
+		for _, r := range reqs {
+			if r.proto != 1 {
+				t.Fatalf("files host saw HTTP/%d, want HTTP/1.1 throughout", r.proto)
 			}
 		}
 
 		// The first download alone, then the n at once.
 		_, metrics := env.get("/metrics")
-		host := strings.TrimPrefix(files.URL, "https://")
+		host := strings.TrimPrefix(h.srv.URL, "https://")
 		wantContains(t, metrics,
 			fmt.Sprintf("via_maris_upstream_response_seconds_count{host=%q} %d\n", host, n+1),
 			fmt.Sprintf("via_maris_upstream_response_seconds_bucket{host=%q,le=\"+Inf\"} %d\n", host, n+1),
