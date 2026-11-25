@@ -291,7 +291,7 @@ func (g *gateway) start(ctx context.Context) {
 }
 
 // Why the upstream client speaks HTTP/1.1 alone: docs/configuration.md,
-// "Operating" (mvdatacenter/ansible-mining#2157).
+// "Operating".
 func newUpstreamClient() *http.Client {
 	var protocols http.Protocols
 	protocols.SetHTTP1(true)

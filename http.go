@@ -58,8 +58,9 @@ func hostOf(raw string) string {
 
 // responseTimeBuckets are the upper bounds, in seconds, of
 // via_maris_upstream_response_seconds. A download usually has its response
-// headers within a second; on 2026-11-25 they took 9 to 26 seconds
-// (mvdatacenter/ansible-mining#2157).
+// headers within a second, and the buckets above that tell a slow upstream
+// connection, as docs/configuration.md "Operating" describes, from one
+// slow answer.
 var responseTimeBuckets = []float64{0.25, 0.5, 1, 2.5, 5, 10, 30}
 
 type responseTimes struct {

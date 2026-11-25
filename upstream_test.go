@@ -12,8 +12,8 @@ import (
 )
 
 // slowWrite is how long each write on the files host's first connection
-// takes. It stands for the one degraded connection of
-// mvdatacenter/ansible-mining#2157, which every download shared.
+// takes. It stands for the one degraded connection every download shared,
+// as docs/configuration.md "Operating" describes.
 const slowWrite = 500 * time.Millisecond
 
 type slowFirstListener struct {
