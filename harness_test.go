@@ -204,6 +204,11 @@ type testEnv struct {
 
 func newTestEnv(t *testing.T, upstreams ...Upstream) *testEnv {
 	t.Helper()
+	return newTestEnvWithClient(t, http.DefaultClient, upstreams...)
+}
+
+func newTestEnvWithClient(t *testing.T, client *http.Client, upstreams ...Upstream) *testEnv {
+	t.Helper()
 	t.Setenv("TEST_KEY_ID", "test-key")
 	t.Setenv("TEST_SECRET", "test-secret")
 	env := &testEnv{t: t}
@@ -226,7 +231,7 @@ func newTestEnv(t *testing.T, upstreams ...Upstream) *testEnv {
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("test configuration: %v", err)
 	}
-	g, err := newGateway(cfg, http.DefaultClient, &env.records)
+	g, err := newGateway(cfg, client, &env.records)
 	if err != nil {
 		t.Fatal(err)
 	}
