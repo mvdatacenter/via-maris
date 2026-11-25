@@ -7,7 +7,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	neturl "net/url"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -24,12 +28,14 @@ func (g *gateway) fetch(ctx context.Context, url, accept string) (*http.Response
 }
 
 func (g *gateway) stream(w http.ResponseWriter, r *http.Request, url string) {
+	start := time.Now()
 	resp, err := g.fetch(r.Context(), url, r.Header.Get("Accept"))
 	if err != nil {
 		upstreamError(w, err)
 		return
 	}
 	defer resp.Body.Close()
+	g.upstream.observe(hostOf(url), time.Since(start))
 	for _, h := range []string{"Content-Type", "Content-Length", "ETag", "Last-Modified"} {
 		if v := resp.Header.Get(h); v != "" {
 			w.Header().Set(h, v)
@@ -37,6 +43,78 @@ func (g *gateway) stream(w http.ResponseWriter, r *http.Request, url string) {
 	}
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
+}
+
+// hostOf names the host a configured upstream URL points at, rather than the
+// host a redirect ends on, so the hosts a series is kept for are the
+// configuration's.
+func hostOf(raw string) string {
+	u, err := neturl.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Host
+}
+
+// responseTimeBuckets are the upper bounds, in seconds, of
+// via_maris_upstream_response_seconds. A download usually has its response
+// headers within a second; on 2026-11-25 they took 9 to 26 seconds
+// (mvdatacenter/ansible-mining#2157).
+var responseTimeBuckets = []float64{0.25, 0.5, 1, 2.5, 5, 10, 30}
+
+type responseTimes struct {
+	mu     sync.Mutex
+	byHost map[string]*responseHistogram
+}
+
+type responseHistogram struct {
+	buckets []uint64 // one per bound in responseTimeBuckets, not cumulative
+	count   uint64
+	sum     float64
+}
+
+func newResponseTimes() *responseTimes {
+	return &responseTimes{byHost: map[string]*responseHistogram{}}
+}
+
+func (rt *responseTimes) observe(host string, d time.Duration) {
+	s := d.Seconds()
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	h := rt.byHost[host]
+	if h == nil {
+		h = &responseHistogram{buckets: make([]uint64, len(responseTimeBuckets))}
+		rt.byHost[host] = h
+	}
+	h.count++
+	h.sum += s
+	for i, le := range responseTimeBuckets {
+		if s <= le {
+			h.buckets[i]++
+			break
+		}
+	}
+}
+
+func (rt *responseTimes) metrics(w io.Writer) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	hosts := make([]string, 0, len(rt.byHost))
+	for host := range rt.byHost {
+		hosts = append(hosts, host)
+	}
+	sort.Strings(hosts)
+	for _, host := range hosts {
+		h := rt.byHost[host]
+		var cum uint64
+		for i, le := range responseTimeBuckets {
+			cum += h.buckets[i]
+			fmt.Fprintf(w, "via_maris_upstream_response_seconds_bucket{host=%q,le=%q} %d\n", host, strconv.FormatFloat(le, 'f', -1, 64), cum)
+		}
+		fmt.Fprintf(w, "via_maris_upstream_response_seconds_bucket{host=%q,le=\"+Inf\"} %d\n", host, h.count)
+		fmt.Fprintf(w, "via_maris_upstream_response_seconds_sum{host=%q} %g\n", host, h.sum)
+		fmt.Fprintf(w, "via_maris_upstream_response_seconds_count{host=%q} %d\n", host, h.count)
+	}
 }
 
 func upstreamError(w http.ResponseWriter, err error) {
