@@ -30,6 +30,7 @@ type gateway struct {
 	ecosystems []string
 	byName     *byName
 	stations   *workstationRoutes
+	upstream   *responseTimes
 }
 
 func newGateway(cfg *Config, client *http.Client, recordLog io.Writer) (*gateway, error) {
@@ -52,6 +53,7 @@ func newGateway(cfg *Config, client *http.Client, recordLog io.Writer) (*gateway
 		held:     map[string]*heldFiles{},
 		poms:     &pomDates{at: map[string]time.Time{}},
 		stations: newWorkstationRoutes(),
+		upstream: newResponseTimes(),
 	}
 	seen := map[string]bool{}
 	for i := range cfg.Upstreams {
@@ -234,6 +236,7 @@ func (g *gateway) metrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "via_maris_pinned_unheld{upstream=%q} %d\n", name, h.unheld())
 	}
 	g.stations.metrics(w)
+	g.upstream.metrics(w)
 }
 
 func unixOrZero(t time.Time) int64 {
@@ -287,13 +290,22 @@ func (g *gateway) start(ctx context.Context) {
 	}
 }
 
-func main() {
-	client := &http.Client{Transport: &http.Transport{
+// Why the upstream client speaks HTTP/1.1 alone: docs/configuration.md,
+// "Operating".
+func newUpstreamClient() *http.Client {
+	var protocols http.Protocols
+	protocols.SetHTTP1(true)
+	return &http.Client{Transport: &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		ResponseHeaderTimeout: 60 * time.Second,
 		IdleConnTimeout:       90 * time.Second,
 		MaxIdleConnsPerHost:   32,
+		Protocols:             &protocols,
 	}}
+}
+
+func main() {
+	client := newUpstreamClient()
 	if len(os.Args) == 3 && os.Args[1] == "recheck" {
 		if err := recheckMain(os.Args[2], client); err != nil {
 			log.Fatalf("recheck: %v", err)
