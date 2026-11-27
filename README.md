@@ -10,6 +10,8 @@ A version listed as malicious in published advisory data is refused, and so is a
 
 `via-maris hold-lag` reports each month how many malicious versions were still unlisted when each ecosystem's hold ended.
 
+`via-maris clamp-dependabot` clamps held transitive npm versions in open Dependabot pull requests' lockfiles back to versions the gateway serves.
+
 The gateway keeps nothing that cannot be fetched again from upstream. Its behaviour comes entirely from configuration: the list of upstream registries it fronts and the policy applied to each.
 
 The name comes from the Via Maris, the Way of the Sea, the ancient road from Egypt through Galilee to Damascus.
