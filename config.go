@@ -409,7 +409,7 @@ func (n *NPMByName) validate(c *Config, pypiHosts ...string) error {
 }
 
 func (u *Upstream) validate(seen map[string]bool) error {
-	if !upstreamName.MatchString(u.Name) || seen[u.Name] || u.Name == "healthz" || u.Name == "metrics" {
+	if !upstreamName.MatchString(u.Name) || seen[u.Name] || u.Name == "healthz" || u.Name == "metrics" || u.Name == "verdicts" {
 		return fmt.Errorf("upstream name %q is not lower-case letters, digits and dashes, or is repeated or reserved", u.Name)
 	}
 	seen[u.Name] = true

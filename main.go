@@ -98,6 +98,9 @@ func (g *gateway) handler() http.Handler {
 			h = func(w http.ResponseWriter, r *http.Request) { g.pinned(w, r, up) }
 		}
 		mux.HandleFunc("/"+up.Name+"/", g.gated(up, h))
+		if up.Ecosystem == "npm" {
+			mux.HandleFunc("/verdicts/"+up.Name+"/", g.gated(up, func(w http.ResponseWriter, r *http.Request) { g.npmVerdicts(w, r, up) }))
+		}
 		for _, host := range up.Hosts {
 			byHost[host] = g.gated(up, func(w http.ResponseWriter, r *http.Request) { g.aptByHost(w, r, up) })
 		}
@@ -324,8 +327,14 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) == 3 && os.Args[1] == "clamp-dependabot" {
+		if err := clampDependabotMain(os.Args[2], client); err != nil {
+			log.Fatalf("clamp-dependabot: %v", err)
+		}
+		return
+	}
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: via-maris <config.json>\n       via-maris recheck <recheck.json>\n       via-maris egress-observe <egress-observe.json>\n       via-maris hold-lag <hold-lag.json> [YYYY-MM]")
+		fmt.Fprintln(os.Stderr, "usage: via-maris <config.json>\n       via-maris recheck <recheck.json>\n       via-maris egress-observe <egress-observe.json>\n       via-maris hold-lag <hold-lag.json> [YYYY-MM]\n       via-maris clamp-dependabot <dependabot-clamp.json>")
 		os.Exit(2)
 	}
 	cfg, err := loadConfig(os.Args[1])

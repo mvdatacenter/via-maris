@@ -1,0 +1,12 @@
+{
+  "gateway": "http://via-maris:8480",
+  "upstream": "npm",
+  "github": {
+    "api": "https://api.github.com",
+    "owner": "mvdatacenter",
+    "appIdEnv": "GITHUB_APP_ID",
+    "installationIdEnv": "GITHUB_APP_INSTALLATION_ID",
+    "privateKeyEnv": "GITHUB_APP_PRIVATE_KEY"
+  },
+  "maxWritesPerPass": 20
+}

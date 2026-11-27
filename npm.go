@@ -219,3 +219,113 @@ func (g *gateway) npmTarball(w http.ResponseWriter, r *http.Request, up *Upstrea
 	g.record(r, up, "artifact", name, file, vd)
 	refuse(w, refusal(name, file, vd), true)
 }
+
+type npmVerdictsResponse struct {
+	Name     string                       `json:"name"`
+	Upstream string                       `json:"upstream"`
+	Versions map[string]npmVersionVerdict `json:"versions"`
+}
+
+type npmVersionVerdict struct {
+	Served               bool              `json:"served"`
+	Reason               string            `json:"reason,omitempty"`
+	Published            string            `json:"published,omitempty"`
+	Tarball              string            `json:"tarball,omitempty"`
+	Shasum               string            `json:"shasum,omitempty"`
+	Integrity            string            `json:"integrity,omitempty"`
+	Dependencies         map[string]string `json:"dependencies,omitempty"`
+	OptionalDependencies map[string]string `json:"optionalDependencies,omitempty"`
+	PeerDependencies     map[string]string `json:"peerDependencies,omitempty"`
+}
+
+func stringMap(v any) map[string]string {
+	m, ok := v.(map[string]any)
+	if !ok || len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, raw := range m {
+		if s, ok := raw.(string); ok {
+			out[k] = s
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func (g *gateway) npmVerdicts(w http.ResponseWriter, r *http.Request, up *Upstream) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "via-maris: method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rest := strings.TrimPrefix(r.URL.EscapedPath(), "/verdicts/"+up.Name+"/")
+	name, err := url.PathUnescape(rest)
+	if err != nil {
+		http.Error(w, "via-maris: bad path", http.StatusBadRequest)
+		return
+	}
+	parts := strings.Split(name, "/")
+	valid := false
+	if strings.HasPrefix(name, "@") {
+		valid = len(parts) == 2 && len(parts[0]) > 1 && parts[1] != ""
+	} else {
+		valid = len(parts) == 1 && parts[0] != ""
+	}
+	if !valid || strings.Contains(name, "..") {
+		http.NotFound(w, r)
+		return
+	}
+	if why := g.advisoriesUnusable(up.Ecosystem); why != "" {
+		g.record(r, up, "verdicts", name, "", verdict{Served: false, Reason: why})
+		http.Error(w, "via-maris refused this request: "+why, http.StatusServiceUnavailable)
+		return
+	}
+	doc, status, err := g.packument(r.Context(), up, name)
+	if err != nil {
+		upstreamError(w, err)
+		return
+	}
+	if status != http.StatusOK {
+		upstreamStatus(w, status, name)
+		return
+	}
+	versions, _ := doc["versions"].(map[string]any)
+	out := npmVerdictsResponse{
+		Name:     name,
+		Upstream: up.Name,
+		Versions: make(map[string]npmVersionVerdict, len(versions)),
+	}
+	refused := 0
+	for v, m := range versions {
+		man, _ := m.(map[string]any)
+		if man == nil {
+			continue
+		}
+		pub := npmPublished(doc, v)
+		vd := g.check(up, name, v, pub)
+		if !vd.Served {
+			refused++
+		}
+		entry := npmVersionVerdict{
+			Served:               vd.Served,
+			Reason:               vd.Reason,
+			Dependencies:         stringMap(man["dependencies"]),
+			OptionalDependencies: stringMap(man["optionalDependencies"]),
+			PeerDependencies:     stringMap(man["peerDependencies"]),
+		}
+		if !pub.IsZero() {
+			entry.Published = pub.UTC().Format(time.RFC3339)
+		}
+		if dist, ok := man["dist"].(map[string]any); ok {
+			entry.Tarball, _ = dist["tarball"].(string)
+			entry.Shasum, _ = dist["shasum"].(string)
+			entry.Integrity, _ = dist["integrity"].(string)
+		}
+		out.Versions[v] = entry
+	}
+	g.record(r, up, "verdicts", name, "", verdict{Served: true, Reason: fmt.Sprintf("%d of %d versions refused", refused, len(out.Versions))})
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
