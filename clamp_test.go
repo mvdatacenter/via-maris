@@ -354,6 +354,7 @@ type mockClampGitHub struct {
 	comments         map[string][]issueComment
 	refUpdates       []mockRefUpdate
 	rejectNextRef422 bool
+	failNextPRs500   bool
 	seq              int
 }
 
@@ -418,6 +419,11 @@ func newMockClampGitHub(t *testing.T, key *rsa.PublicKey) (*mockClampGitHub, *ht
 
 		switch {
 		case r.Method == http.MethodGet && sub == "pulls":
+			if m.failNextPRs500 {
+				m.failNextPRs500 = false
+				http.Error(w, `{"message":"github outage"}`, http.StatusInternalServerError)
+				return
+			}
 			json.NewEncoder(w).Encode(m.prs[repoName])
 		case r.Method == http.MethodGet && strings.HasPrefix(sub, "pulls/") && strings.HasSuffix(sub, "/files"):
 			num := strings.TrimSuffix(strings.TrimPrefix(sub, "pulls/"), "/files")
@@ -1205,5 +1211,15 @@ func TestClampDependabotFilteringRefMovedCapAndFailClosed(t *testing.T) {
 	}
 	if len(env.gh.comments["mvdatacenter/app#16"]) != 0 {
 		t.Errorf("unready gateway wrote comments on PR #16")
+	}
+
+	env.cfg.Gateway = env.gw.srv.URL
+	ghErrRun, err := newClampRun(env.cfg, http.DefaultClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.gh.failNextPRs500 = true
+	if err := ghErrRun.run(context.Background()); err == nil || !strings.Contains(err.Error(), "500") || !strings.Contains(err.Error(), "github outage") {
+		t.Fatalf("expected 500 github outage error, got %v", err)
 	}
 }
