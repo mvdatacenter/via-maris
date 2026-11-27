@@ -278,6 +278,21 @@ func escapeGitHubPath(p string) string {
 	return strings.Join(parts, "/")
 }
 
+func readGitHubJSON(resp *http.Response, wantStatus int, action string, dst any) error {
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil {
+		return fmt.Errorf("%s: %w", action, err)
+	}
+	if resp.StatusCode != wantStatus {
+		return fmt.Errorf("%s: %s %s", action, resp.Status, strings.TrimSpace(string(body[:min(len(body), 512)])))
+	}
+	if err := json.Unmarshal(body, dst); err != nil {
+		return fmt.Errorf("%s: %w", action, err)
+	}
+	return nil
+}
+
 func (a *githubApp) openPullRequests(ctx context.Context, fullName string) ([]pullRequest, error) {
 	var out []pullRequest
 	for page := 1; ; page++ {
@@ -287,13 +302,8 @@ func (a *githubApp) openPullRequests(ctx context.Context, fullName string) ([]pu
 			return nil, err
 		}
 		var batch []pullRequest
-		err = json.NewDecoder(resp.Body).Decode(&batch)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("%s: listing open pull requests: %s", fullName, resp.Status)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("%s: listing open pull requests: %w", fullName, err)
+		if err := readGitHubJSON(resp, http.StatusOK, fullName+": listing open pull requests", &batch); err != nil {
+			return nil, err
 		}
 		out = append(out, batch...)
 		if len(batch) < 100 {
@@ -311,13 +321,8 @@ func (a *githubApp) pullRequestFiles(ctx context.Context, fullName string, numbe
 			return nil, err
 		}
 		var batch []pullFile
-		err = json.NewDecoder(resp.Body).Decode(&batch)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("%s#%d: listing files: %s", fullName, number, resp.Status)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("%s#%d: listing files: %w", fullName, number, err)
+		if err := readGitHubJSON(resp, http.StatusOK, fmt.Sprintf("%s#%d: listing files", fullName, number), &batch); err != nil {
+			return nil, err
 		}
 		out = append(out, batch...)
 		if len(batch) < 100 {
@@ -341,7 +346,7 @@ func (a *githubApp) fileContent(ctx context.Context, fullName, filePath, ref str
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s:%s@%s: %s %s", fullName, filePath, ref, resp.Status, strings.TrimSpace(string(b[:min(len(b), 256)])))
+		return nil, fmt.Errorf("%s:%s@%s: %s %s", fullName, filePath, ref, resp.Status, strings.TrimSpace(string(b[:min(len(b), 512)])))
 	}
 	return b, nil
 }
@@ -355,13 +360,8 @@ func (a *githubApp) issueComments(ctx context.Context, fullName string, number i
 			return nil, err
 		}
 		var batch []issueComment
-		err = json.NewDecoder(resp.Body).Decode(&batch)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("%s#%d: listing comments: %s", fullName, number, resp.Status)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("%s#%d: listing comments: %w", fullName, number, err)
+		if err := readGitHubJSON(resp, http.StatusOK, fmt.Sprintf("%s#%d: listing comments", fullName, number), &batch); err != nil {
+			return nil, err
 		}
 		out = append(out, batch...)
 		if len(batch) < 100 {
@@ -416,12 +416,10 @@ func (a *githubApp) commitFiles(ctx context.Context, fullName, headRef, headSHA,
 			SHA string `json:"sha"`
 		} `json:"tree"`
 	}
-	err = json.NewDecoder(resp.Body).Decode(&headCommit)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%s: reading head commit %s: %s", fullName, headSHA, resp.Status)
+	if err := readGitHubJSON(resp, http.StatusOK, fmt.Sprintf("%s: reading head commit %s", fullName, headSHA), &headCommit); err != nil {
+		return "", err
 	}
-	if err != nil || headCommit.Tree.SHA == "" {
+	if headCommit.Tree.SHA == "" {
 		return "", fmt.Errorf("%s: reading head commit %s: no tree sha", fullName, headSHA)
 	}
 
@@ -450,12 +448,10 @@ func (a *githubApp) commitFiles(ctx context.Context, fullName, headRef, headSHA,
 		var blob struct {
 			SHA string `json:"sha"`
 		}
-		err = json.NewDecoder(bresp.Body).Decode(&blob)
-		bresp.Body.Close()
-		if bresp.StatusCode != http.StatusCreated {
-			return "", fmt.Errorf("%s: creating blob for %s: %s", fullName, p, bresp.Status)
+		if err := readGitHubJSON(bresp, http.StatusCreated, fmt.Sprintf("%s: creating blob for %s", fullName, p), &blob); err != nil {
+			return "", err
 		}
-		if err != nil || blob.SHA == "" {
+		if blob.SHA == "" {
 			return "", fmt.Errorf("%s: creating blob for %s: no sha", fullName, p)
 		}
 		entries = append(entries, treeEntry{Path: p, Mode: "100644", Type: "blob", SHA: blob.SHA})
@@ -472,12 +468,10 @@ func (a *githubApp) commitFiles(ctx context.Context, fullName, headRef, headSHA,
 	var newTree struct {
 		SHA string `json:"sha"`
 	}
-	err = json.NewDecoder(tresp.Body).Decode(&newTree)
-	tresp.Body.Close()
-	if tresp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("%s: creating tree: %s", fullName, tresp.Status)
+	if err := readGitHubJSON(tresp, http.StatusCreated, fullName+": creating tree", &newTree); err != nil {
+		return "", err
 	}
-	if err != nil || newTree.SHA == "" {
+	if newTree.SHA == "" {
 		return "", fmt.Errorf("%s: creating tree: no sha", fullName)
 	}
 
@@ -496,12 +490,10 @@ func (a *githubApp) commitFiles(ctx context.Context, fullName, headRef, headSHA,
 	var newCommit struct {
 		SHA string `json:"sha"`
 	}
-	err = json.NewDecoder(cresp.Body).Decode(&newCommit)
-	cresp.Body.Close()
-	if cresp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("%s: creating commit: %s", fullName, cresp.Status)
+	if err := readGitHubJSON(cresp, http.StatusCreated, fullName+": creating commit", &newCommit); err != nil {
+		return "", err
 	}
-	if err != nil || newCommit.SHA == "" {
+	if newCommit.SHA == "" {
 		return "", fmt.Errorf("%s: creating commit: no sha", fullName)
 	}
 

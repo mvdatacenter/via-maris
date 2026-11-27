@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -131,12 +132,15 @@ func (vc *verdictClient) get(ctx context.Context, pkg string) (*npmVerdictsRespo
 		return nil, fmt.Errorf("verdicts %s: %w", pkg, err)
 	}
 	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil {
+		return nil, fmt.Errorf("verdicts %s: %w", pkg, err)
+	}
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("verdicts %s: %s %s", pkg, resp.Status, strings.TrimSpace(string(b)))
+		return nil, fmt.Errorf("verdicts %s: %s %s", pkg, resp.Status, strings.TrimSpace(string(body[:min(len(body), 512)])))
 	}
 	var out npmVerdictsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.Unmarshal(body, &out); err != nil {
 		return nil, fmt.Errorf("verdicts %s: %w", pkg, err)
 	}
 	vc.cache[pkg] = &out
@@ -390,10 +394,9 @@ func formatBlockingComment(headSHA string, blocking []string) string {
 var errUnsupportedLockfile = errors.New("unsupported lockfile format")
 
 type partialSemver struct {
-	nums   [3]int
-	has    [3]bool
-	pre    []string
-	hasPre bool
+	nums [3]int
+	has  [3]bool
+	pre  []string
 }
 
 func parsePartialSemver(s string) (partialSemver, bool) {
@@ -422,7 +425,6 @@ func parsePartialSemver(s string) (partialSemver, bool) {
 	}
 	if hasPre && prePart != "" {
 		out.pre = strings.Split(prePart, ".")
-		out.hasPre = true
 	}
 	return out, true
 }
@@ -955,7 +957,7 @@ func serializeYarnLock(header []string, entries []*yarnEntry) string {
 			merged[k] = cp
 		} else {
 			for _, s := range e.selectors {
-				if !containsString(ex.selectors, s) {
+				if !slices.Contains(ex.selectors, s) {
 					ex.selectors = append(ex.selectors, s)
 				}
 			}
@@ -1446,7 +1448,7 @@ func clampPackageLock(ctx context.Context, vc *verdictClient, pkgJSONText, baseL
 	var clamped []string
 	visited := map[string]bool{}
 
-	applyVersion := func(pkgPath, realName, ver string, baseMeta map[string]any, vd npmVersionVerdict, meta map[string]any) {
+	applyVersion := func(realName, ver string, baseMeta map[string]any, vd npmVersionVerdict, meta map[string]any) {
 		meta["version"] = ver
 		if baseMeta != nil {
 			if res, ok := baseMeta["resolved"].(string); ok && res != "" {
@@ -1584,7 +1586,7 @@ func clampPackageLock(ctx context.Context, vc *verdictClient, pkgJSONText, baseL
 				if realName != depName {
 					entry["name"] = realName
 				}
-				applyVersion(targetPath, realName, ver, baseMeta, vd, entry)
+				applyVersion(realName, ver, baseMeta, vd, entry)
 				headPkgs[targetPath] = entry
 				if err := ensureDeps(targetPath); err != nil {
 					return err
@@ -1609,7 +1611,7 @@ func clampPackageLock(ctx context.Context, vc *verdictClient, pkgJSONText, baseL
 			continue
 		}
 		meta := headPkgs[h.path].(map[string]any)
-		applyVersion(h.path, h.realName, chosen, baseMeta, vd, meta)
+		applyVersion(h.realName, chosen, baseMeta, vd, meta)
 		clamped = append(clamped, fmt.Sprintf("%s (%s): %s -> %s", h.realName, strings.Join(ranges, ", "), h.version, chosen))
 		if err := ensureDeps(h.path); err != nil {
 			return "", false, nil, nil, err
@@ -1726,13 +1728,4 @@ func sortedMapKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-func containsString(xs []string, target string) bool {
-	for _, x := range xs {
-		if x == target {
-			return true
-		}
-	}
-	return false
 }
