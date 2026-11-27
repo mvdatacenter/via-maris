@@ -37,7 +37,7 @@ func TestExampleDependabotClampConfigLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Gateway != "http://via-maris.via-maris.svc:8480" || cfg.Upstream != "npm" || cfg.GitHub.Owner != "mvdatacenter" || cfg.MaxWritesPerPass != 20 {
+	if cfg.Gateway != "http://via-maris:8480" || cfg.Upstream != "npm" || cfg.GitHub.Owner != "mvdatacenter" || cfg.MaxWritesPerPass != 20 {
 		t.Errorf("loaded %+v", cfg)
 	}
 }
@@ -704,17 +704,17 @@ brand-new-dep@^1.0.0:
 		t.Fatalf("unclamped tarballs %v, want 403 on held transitives", before)
 	}
 
-	env.gh.repos = []map[string]any{repo("mvdatacenter/ansible-mining", false)}
-	env.gh.prs["mvdatacenter/ansible-mining"] = []pullRequest{
-		makePR(2162, "dependabot[bot]", "mvdatacenter/ansible-mining", "mvdatacenter/ansible-mining", "dependabot/npm_and_yarn/roles/proxy/files/hapi-21.4.11", "head-sha-1", "base-sha-1"),
+	env.gh.repos = []map[string]any{repo("mvdatacenter/app", false)}
+	env.gh.prs["mvdatacenter/app"] = []pullRequest{
+		makePR(42, "dependabot[bot]", "mvdatacenter/app", "mvdatacenter/app", "dependabot/npm_and_yarn/services/proxy/hapi-21.4.11", "head-sha-1", "base-sha-1"),
 	}
-	env.gh.prFiles["mvdatacenter/ansible-mining#2162"] = []pullFile{
-		{Filename: "roles/proxy/files/package.json", Status: "modified"},
-		{Filename: "roles/proxy/files/yarn.lock", Status: "modified"},
+	env.gh.prFiles["mvdatacenter/app#42"] = []pullFile{
+		{Filename: "services/proxy/package.json", Status: "modified"},
+		{Filename: "services/proxy/yarn.lock", Status: "modified"},
 	}
-	env.gh.files["mvdatacenter/ansible-mining@head-sha-1:roles/proxy/files/package.json"] = pkgJSON
-	env.gh.files["mvdatacenter/ansible-mining@head-sha-1:roles/proxy/files/yarn.lock"] = headLock
-	env.gh.files["mvdatacenter/ansible-mining@base-sha-1:roles/proxy/files/yarn.lock"] = baseLock
+	env.gh.files["mvdatacenter/app@head-sha-1:services/proxy/package.json"] = pkgJSON
+	env.gh.files["mvdatacenter/app@head-sha-1:services/proxy/yarn.lock"] = headLock
+	env.gh.files["mvdatacenter/app@base-sha-1:services/proxy/yarn.lock"] = baseLock
 
 	if err := env.run.run(context.Background()); err != nil {
 		t.Fatal(err)
@@ -734,7 +734,7 @@ brand-new-dep@^1.0.0:
 	if len(upd.Files) != 1 {
 		t.Fatalf("committed files = %v, want only yarn.lock (package.json untouched)", upd.Files)
 	}
-	clampedLock := upd.Files["roles/proxy/files/yarn.lock"]
+	clampedLock := upd.Files["services/proxy/yarn.lock"]
 	if clampedLock == "" {
 		t.Fatal("clamped yarn.lock missing from commit")
 	}
@@ -758,8 +758,8 @@ brand-new-dep@^1.0.0:
 	if err := env.run.run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(env.gh.refUpdates) != 1 || len(env.gh.comments["mvdatacenter/ansible-mining#2162"]) != 0 {
-		t.Errorf("second pass was not idempotent: refUpdates=%d comments=%d", len(env.gh.refUpdates), len(env.gh.comments["mvdatacenter/ansible-mining#2162"]))
+	if len(env.gh.refUpdates) != 1 || len(env.gh.comments["mvdatacenter/app#42"]) != 0 {
+		t.Errorf("second pass was not idempotent: refUpdates=%d comments=%d", len(env.gh.refUpdates), len(env.gh.comments["mvdatacenter/app#42"]))
 	}
 }
 
@@ -1155,7 +1155,7 @@ func TestClampDependabotFilteringRefMovedCapAndFailClosed(t *testing.T) {
 		repo("other-org/app", false),
 	}
 	env.gh.prs["mvdatacenter/app"] = []pullRequest{
-		makePR(10, "matthew-levi", "mvdatacenter/app", "mvdatacenter/app", "feat/deps", "s10", "b"),
+		makePR(10, "alice", "mvdatacenter/app", "mvdatacenter/app", "feat/deps", "s10", "b"),
 		makePR(11, "dependabot[bot]", "fork/app", "mvdatacenter/app", "dependabot/hapi", "s11", "b"),
 		makePR(12, "dependabot[bot]", "mvdatacenter/app", "mvdatacenter/app", "dependabot/code", "s12", "b"),
 		makePR(13, "dependabot[bot]", "mvdatacenter/app", "mvdatacenter/app", "dependabot/pkgonly", "s13", "b"),

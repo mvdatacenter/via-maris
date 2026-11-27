@@ -1,5 +1,5 @@
 {
-  "gateway": "http://via-maris.via-maris.svc:8480",
+  "gateway": "http://via-maris:8480",
   "upstream": "npm",
   "github": {
     "api": "https://api.github.com",
